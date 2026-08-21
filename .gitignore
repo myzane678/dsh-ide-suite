@@ -1,0 +1,16 @@
+# 依赖
+node_modules/
+*.tsbuildinfo
+
+# 构建产物
+lib/
+
+# 交接/记录文件
+memory.md
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# PSES/PSScriptAnalyzer vendor：298MB 二进制不入库（安装走 Release tgz 资产，本地 link 安装不受影响）
+dsh-lsp-powershell/vendor/

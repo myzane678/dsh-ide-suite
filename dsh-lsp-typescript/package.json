@@ -1,0 +1,71 @@
+{
+  "name": "dsh-lsp-typescript",
+  "version": "0.1.0",
+  "description": "DSH TypeScript/JavaScript 语言插件：注册 ts/tsx/js/jsx 语言（LSP 服务器 typescript-language-server）到 dsh-lsp-core 注册表。语法高亮由 dsh-ide-layout 内置表提供（CodeMirror 扩展禁止跨 bundle 双副本）。",
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "types": "./lib/types/client/index.d.ts",
+      "default": "./lib/client.js"
+    },
+    "./src/*": "./src/*",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime"
+      ],
+      "platform": "web"
+    }
+  },
+  "files": [
+    "lib",
+    "src",
+    "cordis.patch.yml",
+    "LICENSE"
+  ],
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-client-runtime": "^0.1.0-rc.6",
+    "dsh-lsp-core": "workspace:*",
+    "react": "^18.2.0"
+  },
+  "peerDependenciesMeta": {
+    "dsh-lsp-core": {
+      "optional": true
+    }
+  },
+  "dependencies": {
+    "typescript": "^5.7.2",
+    "typescript-language-server": "^4.3.0"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-client-runtime": "^0.1.0-rc.6",
+    "@types/node": "^22.20.0",
+    "@types/react": "~18.3.1",
+    "cordis": "^4.0.0-rc.7",
+    "dsh-lsp-core": "workspace:*",
+    "react": "^18.3.1",
+    "tsdown": "0.22.2",
+    "typescript": "~5.7.2",
+    "vitest": "^4.1.10"
+  },
+  "scripts": {
+    "build": "tsc -b && tsdown",
+    "prepare": "pnpm build",
+    "typecheck": "tsc -b --pretty false",
+    "test": "vitest run"
+  },
+  "license": "MIT"
+}

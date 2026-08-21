@@ -1,0 +1,5 @@
+{
+  "name": "dsh-lsp-monorepo",
+  "private": true,
+  "packageManager": "pnpm@11.7.0"
+}

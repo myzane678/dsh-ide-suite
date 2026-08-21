@@ -1,0 +1,5 @@
+# dsh-lsp-powershell bundle patch: registers the dual-face plugin row
+# (host half = PSES 服务器配置；client half = powershell 语言注册)。
+- insert:
+    - id: lsp-powershell
+      name: 'dsh-lsp-powershell'

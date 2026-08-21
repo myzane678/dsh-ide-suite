@@ -1,0 +1,5 @@
+# dsh-lsp-java bundle patch: registers the dual-face plugin row
+# (host half = JDTLS discover/commandFor；client half = java 语言注册)。
+- insert:
+    - id: lsp-java
+      name: 'dsh-lsp-java'

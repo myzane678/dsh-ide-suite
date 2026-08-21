@@ -1,0 +1,12 @@
+packages:
+  - 'dsh-ide-layout'
+  - 'dsh-lsp-core'
+  - 'dsh-lsp-python'
+  - 'dsh-lsp-typescript'
+  - 'dsh-lsp-powershell'
+  - 'dsh-lsp-java'
+
+allowBuilds:
+  node-pty: true
+onlyBuiltDependencies:
+  - node-pty

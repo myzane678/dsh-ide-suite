@@ -1,0 +1,5 @@
+# dsh-lsp-core bundle patch: registers the dual-face plugin row
+# (host half = LSP 桥 + 服务器注册表；client half = 语言注册表 + LanguageCapability)。
+- insert:
+    - id: lsp-core
+      name: 'dsh-lsp-core'

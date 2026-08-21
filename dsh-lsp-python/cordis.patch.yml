@@ -1,0 +1,5 @@
+# dsh-lsp-python bundle patch: registers the dual-face plugin row
+# (host half = pyright 服务器配置；client half = Python 语言注册)。
+- insert:
+    - id: lsp-python
+      name: 'dsh-lsp-python'

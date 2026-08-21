@@ -1,0 +1,5 @@
+# dsh-lsp-typescript bundle patch: registers the dual-face plugin row
+# (host half = typescript-language-server 服务器配置；client half = ts/tsx/js/jsx 语言注册)。
+- insert:
+    - id: lsp-typescript
+      name: 'dsh-lsp-typescript'
