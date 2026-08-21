@@ -106,6 +106,7 @@ dsh-ide-suite/
 ├── dsh-lsp-python/          # 语言插件 × 4（python / typescript / powershell / java）
 │   └── ...
 ├── docs/lsp-split-design.md # 拆分工程设计文档（阶段 0-3 全记录）
+├── CHANGELOG.md             # suite 级更新日志（逐版记录）
 └── pnpm-workspace.yaml
 ```
 
@@ -115,29 +116,7 @@ LSP 拆分工程的设计与分阶段记录：[docs/lsp-split-design.md](docs/ls
 
 ## 更新日志
 
-### v1.0.1（2026-08-22）
-
-- 修复：非 LSP 语言（json/md/yaml 等）状态栏语言名显示 `plaintext`（1.0.0 拆分引入的退化）——新增轻量语法注册表，状态栏按「LSP 注册表 → 内置展示名表 → plaintext」三级回退。仅 `dsh-ide-layout` 升级，其余包不变。
-
-### v1.0.0（2026-08-22）
-
-- **LSP 拆分工程完成，六包全家桶（超级大更新）**：编辑器语言无关化 + LSP 基础设施 + 四语言插件——新增一种语言的 LSP 支持 = 新增一个插件，编辑器零改动。
-- tsserver 会话归一（一条会话服务 ts/tsx/js/jsx）；修复启动崩溃、`.py` 打不开等三处产物级 bug。
-- `dsh-ide-layout` 全历史并入 monorepo（v0.1.0 起保留）。
-
-### v0.3.0 – v0.3.1（2026-08-21）
-
-- 编辑器编码选择（UTF-8 / 自动检测 / GB18030 / GBK / Big5 / UTF-16 LE，中文旧文件不乱码）；图片预览（8 种格式，滚轮缩放）；Tab 缩进与 4 空格自动缩进对齐 VS Code；编码菜单弹层方向修复。
-
-### v0.2.0（2026-08-20）
-
-- GitLens 式行内 blame；PowerShell（PSES vendor）与 Java（JDTLS，未装自动降级纯高亮）语言智能；终端右键菜单（复制 / 粘贴 / 清屏 / 重启终端）；LSP 状态栏按服务器分槽；高亮配色去红（红色只留给诊断波浪线）。
-
-### v0.1.0（2026-08-19）
-
-- 初始发布：文件树 + CodeMirror 6 编辑器（TS / Python LSP）+ xterm 终端 + Git 面板 + 问题面板；含 18 项独立安全审查整改（WebSocket 来源校验、PTY 引用计数、URI 门禁等）。
-
-**各包完整明细**：[layout](dsh-ide-layout/CHANGELOG.md)（v0.1.0 → v1.0.1 全程）· [core](dsh-lsp-core/CHANGELOG.md) · [python](dsh-lsp-python/CHANGELOG.md) · [typescript](dsh-lsp-typescript/CHANGELOG.md) · [powershell](dsh-lsp-powershell/CHANGELOG.md) · [java](dsh-lsp-java/CHANGELOG.md)
+见 [CHANGELOG.md](CHANGELOG.md)——v0.1.0 → v1.0.1 逐版记录（v0.x 为 `dsh-ide-layout` 并入前历史）。各子包明细见其各自 CHANGELOG。
 
 ## 跨插件协作约定（贡献必读）
 
