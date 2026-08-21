@@ -37,11 +37,14 @@ import { batchLanguage } from '../batch-mode.ts'
 import { apiGitBlame, apiRead, apiReadBinary, apiRun, apiWrite } from '../api.ts'
 import type { BlameLine, RunResult } from '../api.ts'
 import type { EditorTab } from '../store.ts'
-import { languageIdForPath } from '../../core/types.ts'
 import { isImagePath } from '../../core/media.ts'
 import { encodingLabel, TEXT_ENCODING_CHOICES } from '../../core/encoding.ts'
+// 仅类型 import（浏览器纯度门：不 value-import dsh-lsp-core）。
+import type { LanguageCapability, LspCapabilityService } from 'dsh-lsp-core/client'
+// 工具函数走本地副本（lsp-client.ts）：纯度门禁止 value-import dsh-lsp-core——
+// 纯函数双副本无害（无 instanceof/无状态），这是布局插件侧的必要拷贝。
 import {
-  LspClient, completionInfo, completionTextRange, completionType, normalizeUri, pathToUri, signatureParameterRange,
+  completionInfo, completionTextRange, completionType, normalizeUri, pathToUri, signatureParameterRange,
   type LspDiagnostic, type LspLocation, type LspPosition, type LspRange, type LspSignatureHelp, type LspTextEdit,
 } from '../lsp-client.ts'
 import { TerminalPane } from './TerminalPane.tsx'
@@ -63,9 +66,15 @@ interface EditorPaneProps {
   onDiagnostics: (uri: string, diagnostics: LspDiagnostic[]) => void
   /** 编码切换后以新内容整体替换 tab（content/encoding/mtime/dirty 一起更新）。 */
   onReloadTab: (tab: EditorTab) => void
+  /** dsh-lsp-core 能力工厂（阶段 1：Python 新链路；缺省 = 未安装，走旧 LspClient）。 */
+  lspCapabilities?: LspCapabilityService
 }
 
-/** Pick a CodeMirror language by file extension. */
+/** Pick a CodeMirror language by file extension.
+ *  一律用本 bundle 内置语法表：CodeMirror 扩展对象跨 bundle 会因
+ *  @codemirror/state 双副本抛 "Unrecognized extension value"（.py 打不开
+ *  的根因）。语言插件注册表只提供 LSP 服务器配置，不提供语法工厂
+ *  （待阶段 2 codemirror 单来源后再回归注册表 syntax）。 */
 function languageFor(path: string): Extension {
   const ext = (path.split('.').pop() ?? '').toLowerCase()
   switch (ext) {
@@ -218,8 +227,9 @@ interface CodeMirrorPaneProps {
   onSave: (tab: EditorTab) => void
   /** 编辑器内右键菜单回调（选中文本非空时触发）。 */
   onContextAction: (kind: 'ask-agent' | 'copy', text: string) => void
-  /** LSP 客户端（当前 root 一个，可为 null = 未启用）。 */
-  lsp: LspClient | null
+  /** LSP 客户端（当前 root 一个，可为 null = 未启用）。统一 LanguageCapability 接口：
+   *  旧 ts/ps/java 用 LspClient（已实现接口），Python 用 dsh-lsp-core 的 LspSession。 */
+  lsp: LanguageCapability | null
   /** 当前文件的最新 LSP 诊断（EditorPane 层按 uri 缓存）。 */
   diagnostics: LspDiagnostic[]
   /** 跳转定义：把目标文件（相对路径 + 行）交给 EditorPane 打开。 */
@@ -409,7 +419,7 @@ function renderSignatureDom(help: LspSignatureHelp): HTMLElement {
 }
 
 function hoverTooltipFor(
-  getClient: () => LspClient | null,
+  getClient: () => LanguageCapability | null,
   path: () => string,
 ): (view: EditorView, pos: number) => Promise<Tooltip | null> {
   return async (view, pos) => {
@@ -430,7 +440,7 @@ function hoverTooltipFor(
 
 /** 当前 CodeMirrorPane 的跳转定义回调（F12 / Ctrl+点击共用）。 */
 interface JumpProps {
-  lsp: LspClient | null
+  lsp: LanguageCapability | null
   tab: EditorTab
   root: string
   onOpenLocation: (path: string, line: number) => void
@@ -782,10 +792,10 @@ function CodeMirrorPane({ tab, onContentChange, onSave, onContextAction, lsp, di
   }, [])
 
   useEffect(() => {
-    // LSP 扩展是否安装只看文件类型（语言是否支持），不依赖 lsp 是否已就绪——
-    // LSP 连接异步建立，mount 时可能还是 null；扩展先装上，source 内部
-    // 通过 propsRef 读最新 lsp（就绪后自动生效）。
-    const lspEnabled = languageIdForPath(propsRef.current.tab.path) !== null
+    // LSP 扩展是否安装只看当前 tab 有没有 LSP 会话（lsp prop = lspFor 结果，
+    // acquire 未注册语言返回 null），不依赖连接是否已就绪——连接异步建立，
+    // 扩展先装上，source 内部经 propsRef 读最新 lsp（就绪后自动生效）。
+    const lspEnabled = propsRef.current.lsp !== null
     const view = new EditorView({
       doc: propsRef.current.tab.content,
       extensions: [
@@ -1364,7 +1374,7 @@ function resizeHandleStyle(): React.CSSProperties {
 }
 
 export function EditorPane({
-  root, tabs, activeTabId, onActivate, onClose, onContentChange, onDirtySave, onCloseEditor, onAskAgent, onOpenFile, onDiagnostics, onReloadTab,
+  root, tabs, activeTabId, onActivate, onClose, onContentChange, onDirtySave, onCloseEditor, onAskAgent, onOpenFile, onDiagnostics, onReloadTab, lspCapabilities,
 }: EditorPaneProps): JSX.Element {
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? null
   const [status, setStatus] = useState('')
@@ -1376,15 +1386,13 @@ export function EditorPane({
   const [outputHeight, setOutputHeight] = useState(200)
   // 终端「立即 fit」触发器：手柄松手时 +1，TerminalPane 跳过防抖立即 fit+resize
   const [termFitTick, setTermFitTick] = useState(0)
-  // LSP：每 root 四个语言服务器客户端（ts / py / ps / java），按当前文件类型选用；
-  // 诊断按 uri 缓存（共享一个 map）。Java LSP 是可选能力，找不到 JDTLS 时纯高亮降级。
-  const [tsLsp, setTsLsp] = useState<LspClient | null>(null)
-  const [pyLsp, setPyLsp] = useState<LspClient | null>(null)
-  const [psLsp, setPsLsp] = useState<LspClient | null>(null)
-  const [javaLsp, setJavaLsp] = useState<LspClient | null>(null)
+  // LSP（阶段 2 统一链路）：会话由 dsh-lsp-core lspCapabilities 按 (root, 会话组)
+  // 管理——lspFor 打开文件时 acquire，这里的 state 只承载诊断缓存与状态展示。
+  // Java LSP 是可选能力，本机无 JDTLS 时纯高亮降级。
   const [diagMap, setDiagMap] = useState<Map<string, LspDiagnostic[]>>(new Map())
-  // LSP 状态按服务器分槽（各自独立），避免一个服务器失败时盖住其他语言。
-  const [lspStatus, setLspStatus] = useState<{ ts?: string; py?: string; ps?: string; java?: string }>({})
+  // LSP 状态按会话组分槽（typescript / python / powershell / java，各自独立），
+  // 避免一个服务器失败时盖住其他语言。
+  const [lspStatus, setLspStatus] = useState<Record<string, string>>({})
   // 服务器完整错误日志（window/logMessage type 3），状态栏 hover 可见全文。
   const [lspFullError, setLspFullError] = useState<Record<string, string>>({})
   // 状态栏：光标行列
@@ -1437,32 +1445,38 @@ export function EditorPane({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [root, activeTab?.path, blameTick])
 
-  // 当前文件的 LSP 客户端：仅对 languageIdForPath() 支持的语言返回客户端
-  // （ts / py / ps / java），其余语言返回 null。
-  const lspFor = (path: string): LspClient | null => {
-    const language = languageIdForPath(path)
+  // 当前文件的 LSP 会话：语言路由完全交给 lspCapabilities（注册表驱动，
+  // languageFor 查语言摘要 → acquire 按会话组复用；未注册语言/未装插件返回
+  // null = 纯高亮）。wsUrl 缺省即宿主 lsp-core 桥 /dsh-lsp/ws。
+  const lspFor = (path: string): LanguageCapability | null => {
+    if (lspCapabilities === undefined || root === '') return null
+    const language = lspCapabilities.languageFor(path)
     if (language === null) return null
-    if (language === 'python') return pyLsp
-    if (language === 'powershell') return psLsp
-    if (language === 'java') return javaLsp
-    return tsLsp
+    return lspCapabilities.acquire(root, language.id)
   }
 
-  // 每 root 四个 LSP 会话：root 变化时重建（旧实例 dispose）。
+  // 每 root LSP 会话（阶段 2 统一链路）：按会话组 acquire 各语言会话并订阅
+  // 诊断/状态/服务器日志；未注册语言（语言插件未装）acquire 返回 null 跳过。
+  // root 变化时 disposeRoot 整体重建。ts 系四个 languageId 共享 'typescript'
+  // 会话（注册表 sessionId 归一，一条 tsserver 服务 ts/tsx/js/jsx）。
   useEffect(() => {
-    if (root === '') {
-      setTsLsp(null)
-      setPyLsp(null)
-      setPsLsp(null)
-      setJavaLsp(null)
+    if (root === '' || lspCapabilities === undefined) {
       setDiagMap(new Map())
       return
     }
-    const makeClient = (server: 'ts' | 'py' | 'ps' | 'java'): LspClient => new LspClient({
-      root,
-      rootUri: pathToUri(root, ''),
-      server,
-      onDiagnostics: (uri, diagnostics) => {
+    const SESSION_LANGUAGES: ReadonlyArray<{ language: string; key: string }> = [
+      { language: 'typescript', key: 'typescript' },
+      { language: 'python', key: 'python' },
+      { language: 'powershell', key: 'powershell' },
+      { language: 'java', key: 'java' },
+    ]
+    const disposers: Array<() => void> = []
+    setDiagMap(new Map())
+    for (const { language, key } of SESSION_LANGUAGES) {
+      const cap = lspCapabilities.acquire(root, language)
+      if (cap === null) continue
+      setLspStatus((prev) => ({ ...prev, [key]: '连接中…' }))
+      disposers.push(cap.onDiagnostics((uri, diagnostics) => {
         // 本地缓存（编辑器波浪线）+ 上抛（问题面板聚合）。
         setDiagMap((prev) => {
           const next = new Map(prev)
@@ -1470,39 +1484,23 @@ export function EditorPane({
           return next
         })
         onDiagnostics(uri, diagnostics)
-      },
-      onOpen: () => setLspStatus((prev) => ({ ...prev, [server]: '已连接' })),
-      onFatal: (reason) => setLspStatus((prev) => ({ ...prev, [server]: `LSP 不可用: ${reason}` })),
-      onServerLog: (type, message) => {
+      }))
+      disposers.push(cap.onStatus((status) => {
+        setLspStatus((prev) => ({
+          ...prev,
+          [key]: status === 'ready' ? '已连接' : status === 'error' ? 'LSP 不可用' : '连接中…',
+        }))
+      }))
+      disposers.push(cap.onServerLog((type, message) => {
         // type 3 = Error：服务器失败时的完整 stderr，存起来供状态栏 hover 展示全文。
-        if (type === 3) setLspFullError((prev) => ({ ...prev, [server]: message }))
-      },
-    })
-    const ts = makeClient('ts')
-    const py = makeClient('py')
-    const ps = makeClient('ps')
-    const java = makeClient('java')
-    setTsLsp(ts)
-    setPyLsp(py)
-    setPsLsp(ps)
-    setJavaLsp(java)
-    setDiagMap(new Map())
-    setLspStatus({ ts: '连接中…', py: '连接中…', ps: '连接中…', java: '连接中…' })
-    ts.connect()
-    py.connect()
-    ps.connect()
-    java.connect()
-    return () => {
-      ts.dispose()
-      py.dispose()
-      ps.dispose()
-      java.dispose()
-      setTsLsp(null)
-      setPyLsp(null)
-      setPsLsp(null)
-      setJavaLsp(null)
+        if (type === 3) setLspFullError((prev) => ({ ...prev, [key]: message }))
+      }))
     }
-  }, [root])
+    return () => {
+      for (const dispose of disposers) dispose()
+      lspCapabilities.disposeRoot(root)
+    }
+  }, [root, lspCapabilities])
 
   /** 跳转定义：LSP 返回的 uri（file:///...）→ 相对 root 路径 + 行号。
    *  目标文件已打开则直接定位；未打开则走 mount 层的 openFile。 */
@@ -1870,10 +1868,9 @@ export function EditorPane({
       }}>
         <span style={{ display: 'flex', gap: 12, alignItems: 'center', overflow: 'hidden' }}>
           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{root}</span>
-          {activeTab !== null && languageIdForPath(activeTab.path) !== null && (() => {
-            // 按当前文件语言显示对应语言服务器的状态（各语言分槽，互不污染）。
-            const language = languageIdForPath(activeTab.path)
-            const server = language === 'python' ? 'py' : language === 'powershell' ? 'ps' : language === 'java' ? 'java' : 'ts'
+          {activeTab !== null && lspCapabilities !== undefined && lspCapabilities.languageFor(activeTab.path) !== null && (() => {
+            // 按当前文件语言显示对应语言服务器的状态（各会话组分槽，互不污染）。
+            const server = lspCapabilities.languageFor(activeTab.path)?.sessionId ?? ''
             const status = lspStatus[server] ?? ''
             return (
               <span title={lspFullError[server] !== undefined ? lspFullError[server] : '语言服务器状态'}>
@@ -1905,7 +1902,7 @@ export function EditorPane({
                 )
               })()}
               <span title={`编辑器字号（Ctrl+滚轮调整）: ${editorFontSize}px`}>{editorFontSize}px</span>
-              <span title="语言">{languageIdForPath(activeTab.path) ?? 'plaintext'}</span>
+              <span title="语言">{lspCapabilities?.languageFor(activeTab.path)?.displayName ?? 'plaintext'}</span>
               <span
                 title="文件编码，点击选择（以新编码重新加载）"
                 onClick={(event) => {

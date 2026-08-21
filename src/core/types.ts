@@ -47,20 +47,3 @@ export interface PanelEvent {
   kind: 'fs' | 'git'
   root: string
 }
-
-/** LSP languageId for a file path (or null when unsupported). Shared by the
- *  host LSP bridge (server selection) and the browser client (didOpen). */
-export function languageIdForPath(path: string): string | null {
-  const ext = (path.split('.').pop() ?? '').toLowerCase()
-  switch (ext) {
-    case 'js': case 'mjs': case 'cjs': return 'javascript'
-    case 'jsx': return 'javascriptreact'
-    case 'ts': case 'mts': case 'cts': return 'typescript'
-    case 'tsx': return 'typescriptreact'
-    case 'json': case 'jsonc': case 'map': return 'json'
-    case 'py': case 'pyw': return 'python'
-    case 'ps1': case 'psm1': case 'psd1': return 'powershell'
-    case 'java': return 'java'
-    default: return null
-  }
-}

@@ -10,6 +10,8 @@
 
 import type { ClientContext, SessionId } from '@deepseek-ai/dsh-client-runtime/client'
 import type {} from '@deepseek-ai/dsh-client-ui-slots'
+// 仅类型 import（浏览器纯度门：不 value-import dsh-lsp-core）。
+import type { LspCapabilitiesAccessor } from 'dsh-lsp-core/client'
 import { IdeLayoutController } from './layout.ts'
 import { createStore, IDE_DEFAULT, LAYOUT_DEFAULT, type IdeState } from './store.ts'
 import { mountPanels, type IdeMountApi } from './mount.tsx'
@@ -17,7 +19,7 @@ import { subscribeChanges } from './api.ts'
 import { openFileInTabs } from './components/EditorPane.tsx'
 
 /** Required services: sessions + workspaces for the project root. */
-export const inject = ['sessions', 'workspaces']
+export const inject = ['sessions', 'workspaces', 'lspCapabilities']
 
 /** Apply the browser half. */
 export function apply(ctx: ClientContext): void {
@@ -42,8 +44,15 @@ export function apply(ctx: ClientContext): void {
       }, 400)
     }
 
+    // dsh-lsp-core 服务（阶段 1：Python 走新链路；ts/ps/java 暂走旧 LspClient 双轨）。
+    // 经类型模板断言访问 ctx 属性（浏览器纯度门：不 value-import dsh-lsp-core）。
+    // 只取 lspCapabilities：语法高亮用本 bundle 内置表（跨 bundle CodeMirror 扩展会
+    // 双副本硬崩），lspRegistry 仅供 lspCapabilities 内部查服务器配置。
+    const lspCapabilities = (ctx as unknown as LspCapabilitiesAccessor).lspCapabilities
+
     const api: IdeMountApi = {
       ide,
+      lspCapabilities,
       openFile: (path: string) => {
         // P1-06：函数式 update，迟到的读取合并进最新 tabs，不覆盖并发打开的文件。
         void openFileInTabs(ide.getSnapshot().root, path, (updater) => {

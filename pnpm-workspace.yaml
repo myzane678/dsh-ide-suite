@@ -1,4 +1,0 @@
-allowBuilds:
-  node-pty: true
-onlyBuiltDependencies:
-  - node-pty

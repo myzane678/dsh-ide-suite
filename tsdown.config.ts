@@ -15,18 +15,13 @@ const PLATFORM_MODULES = [
 /** Externals answered by the loader module table (+ the runtime exemption). */
 const CLIENT_EXTERNALS = [...PLATFORM_MODULES, '@deepseek-ai/dsh-client-runtime/client']
 
-/** Node-half externals (resolved from the dsh profile tree at runtime).
- *  LSP 语言服务器（typescript-language-server + typescript）不能被 tsdown 打进
- *  bundle——host 半区用 createRequire 解析其真实路径后 spawn 独立进程，
- *  必须保持 node_modules 中的原始布局。 */
+/** Node-half externals (resolved from the dsh profile tree at runtime)。 */
 const HOST_EXTERNALS = [
   '@deepseek-ai/cordis',
   '@deepseek-ai/dsh-host-webserver',
   '@deepseek-ai/dsh-subprocess',
   '@deepseek-ai/dsh-workspace',
   '@deepseek-ai/dsh-system-prompt',
-  'typescript-language-server',
-  'typescript',
 ]
 
 export default [

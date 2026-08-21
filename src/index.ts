@@ -18,7 +18,6 @@ import type { GateVerdict, WorkspaceGate } from './host/fs-service.ts'
 import { registerPanelRoutes } from './host/routes.ts'
 import { PtyService } from './host/pty-service.ts'
 import { attachTerminalSocket } from './host/ws-terminal.ts'
-import { attachLspSocket } from './host/lsp-service.ts'
 import { isLoopbackRequest, rejectUpgrade } from './host/security.ts'
 
 /** Required services: the route registry and the workspace registry. */
@@ -101,26 +100,6 @@ export function apply(ctx: Context): void {
       wss.close()
     }
   }, 'dsh-ide-layout: terminal WebSocket')
-  // LSP WebSocket：一个 upgrade 端点，?root= 定位工作区根目录（语言服务器
-  // 进程以该目录为 cwd 启动）。浏览器半区经此连接走完整 LSP 协议（补全/诊断）。
-  ctx.effect(() => {
-    const wss = new WebSocketServer({ noServer: true })
-    const dispose = ctx.webServer.registerUpgrade({
-      path: '/dsh-ide/ws/lsp',
-      handler: (req, socket, head) => {
-        // P0-01：与终端 WS 同样的严格来源校验。
-        if (!isLoopbackRequest(req as IncomingMessage, true)) {
-          rejectUpgrade(socket as Duplex)
-          return
-        }
-        wss.handleUpgrade(req as IncomingMessage, socket as Duplex, head as Buffer, (ws) => {
-          attachLspSocket(fs, req as IncomingMessage, ws)
-        })
-      },
-    })
-    return () => {
-      dispose()
-      wss.close()
-    }
-  }, 'dsh-ide-layout: LSP WebSocket')
+  // LSP WebSocket（/dsh-ide/ws/lsp）已随阶段 2 迁移到 dsh-lsp-core（/dsh-lsp/ws，
+  // 注册表驱动）：语言服务器命令由各语言插件（dsh-lsp-python 等）注册。
 }

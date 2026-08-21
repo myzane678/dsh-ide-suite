@@ -1,30 +1,8 @@
-/** Java/现有语言识别回归：编辑器与 LSP 选择必须保持一致。 */
+/** LSP 编辑器适配工具回归（语言路由已由各语言插件的 apply 测试 +
+ *  lsp-core 的 languageFor/registry 测试覆盖；languageIdForPath 已随
+ *  阶段 3 删除——编辑器语言知识全部收敛到注册表）。 */
 import { describe, expect, it } from 'vitest'
-import { languageIdForPath } from '../src/core/types.ts'
-import { lspServerForPath, uriWithinRoot, FrameReader } from '../src/host/lsp-service.ts'
 import { completionTextRange, lspPositionToOffset, pathToUri, signatureParameterRange, type LspCompletionItem, type LspSignatureHelp } from '../src/client/lsp-client.ts'
-
-describe('语言识别', () => {
-  it('Java 源文件使用 java languageId 与 JDTLS server kind', () => {
-    expect(languageIdForPath('src/main/java/App.java')).toBe('java')
-    expect(lspServerForPath('src/main/java/App.java')).toBe('java')
-  })
-
-  it('Java 相关文件仍只对 .java 启用 JDTLS', () => {
-    expect(languageIdForPath('pom.xml')).toBeNull()
-    expect(languageIdForPath('build.gradle')).toBeNull()
-    expect(lspServerForPath('README.md')).toBeNull()
-  })
-
-  it('原有语言路由不回退到 Java', () => {
-    expect(languageIdForPath('src/main.ts')).toBe('typescript')
-    expect(lspServerForPath('src/main.ts')).toBe('ts')
-    expect(languageIdForPath('script.py')).toBe('python')
-    expect(lspServerForPath('script.py')).toBe('py')
-    expect(languageIdForPath('script.ps1')).toBe('powershell')
-    expect(lspServerForPath('script.ps1')).toBe('ps')
-  })
-})
 
 describe('LSP 编辑器适配', () => {
   it('按 LSP textEdit.range 计算导入补全的替换范围', () => {
@@ -55,37 +33,5 @@ describe('LSP 编辑器适配', () => {
   it('lspPositionToOffset 按 UTF-16 计算（emoji 占两个码元）', () => {
     expect(lspPositionToOffset('x😀y\nz', { line: 0, character: 4 })).toBe(4)
     expect(lspPositionToOffset('x😀y\nz', { line: 1, character: 1 })).toBe(6)
-  })
-
-  it('uriWithinRoot 要求目录段边界，防止 /project 匹配 /project2', () => {
-    const prefix = 'file:///e:/work dir'
-    expect(uriWithinRoot('file:///e:/work%20dir/a.py', prefix)).toBe(true)
-    expect(uriWithinRoot('file:///e:/work dir/a.py', prefix)).toBe(true)
-    expect(uriWithinRoot('file:///e:/work%20dir2/a.py', prefix)).toBe(false)
-    expect(uriWithinRoot('file:///e:/other/a.py', prefix)).toBe(false)
-  })
-
-  it('uriWithinRoot 兼容编码后的根前缀（客户端 pathToUri 形式）', () => {
-    const encodedPrefix = 'file:///e:/work%20dir'
-    expect(uriWithinRoot('file:///e:/work%20dir/a.py', encodedPrefix)).toBe(true)
-    expect(uriWithinRoot('file:///e:/work%20dir2/a.py', encodedPrefix)).toBe(false)
-  })
-
-  it('FrameReader 拒绝超过上限的 Content-Length 帧', () => {
-    const reader = new FrameReader(64)
-    const received: unknown[] = []
-    const header = 'Content-Length: 200\r\n\r\n'
-    const body = '{"jsonrpc":"2.0","id":1,"result":null}'
-    expect(reader.push(Buffer.from(header + body), (m) => received.push(m))).toBe(false)
-    expect(received).toEqual([])
-  })
-
-  it('FrameReader 正常拆分多帧消息', () => {
-    const reader = new FrameReader(1024)
-    const received: unknown[] = []
-    const payload = JSON.stringify({ jsonrpc: '2.0', id: 1, result: 'ok' })
-    const frame = `Content-Length: ${Buffer.byteLength(payload)}\r\n\r\n${payload}`
-    expect(reader.push(Buffer.from(frame + frame), (m) => received.push(m))).toBe(true)
-    expect(received).toHaveLength(2)
   })
 })

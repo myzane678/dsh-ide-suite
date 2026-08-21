@@ -5,6 +5,7 @@
 
 import { useEffect, useState, createElement, type JSX, type CSSProperties } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
+import type { LspCapabilityService } from 'dsh-lsp-core/client'
 import type { IdeState, ListenerStore } from './store.ts'
 import { FileTree } from './components/FileTree.tsx'
 import { EditorPane } from './components/EditorPane.tsx'
@@ -55,6 +56,8 @@ export interface IdeMountApi {
   openFile: (path: string, line?: number) => void
   /** 把选中代码追加到聊天输入框（发送给内置 agent）。 */
   askAgent: (text: string, path: string) => void
+  /** dsh-lsp-core 能力工厂（阶段 1：Python 新链路；未安装时为 undefined）。 */
+  lspCapabilities?: LspCapabilityService
 }
 
 /** The sidebar file tree: follows the ide root (workspace/session).
@@ -147,6 +150,7 @@ function Workbench({ api }: { api: IdeMountApi }): JSX.Element {
           root={state.root}
           tabs={state.tabs}
           activeTabId={state.activeTabId}
+          lspCapabilities={api.lspCapabilities}
           onActivate={(id) => api.ide.update((prev) => ({ ...prev, activeTabId: id }))}
           onClose={(id) => api.ide.update((prev) => {
             const closing = prev.tabs.find((tab) => tab.id === id)
