@@ -1,0 +1,2023 @@
+/** Center column: multi-tab editor with open/edit/save. CodeMirror 6 adds
+ * syntax highlighting, line numbers, bracket matching and code folding
+ * (replacing the MVP textarea). */
+
+import { useEffect, useRef, useState, type JSX } from 'react'
+import { createPortal } from 'react-dom'
+import { basicSetup } from 'codemirror'
+import { EditorView, GutterMarker, gutter, hoverTooltip, keymap, showTooltip, tooltips, type Tooltip } from '@codemirror/view'
+import { Compartment, Prec, EditorState, StateEffect, StateField, type Extension, type Text } from '@codemirror/state'
+import { HighlightStyle, indentUnit, syntaxHighlighting } from '@codemirror/language'
+import { tags as t } from '@lezer/highlight'
+import { autocompletion, acceptCompletion, hasNextSnippetField, hasPrevSnippetField, nextSnippetField, prevSnippetField, snippet, startCompletion, type CompletionContext, type CompletionResult } from '@codemirror/autocomplete'
+import { forceLinting, linter, type Diagnostic } from '@codemirror/lint'
+import { indentLess, indentMore } from '@codemirror/commands'
+import { javascript } from '@codemirror/lang-javascript'
+import { json } from '@codemirror/lang-json'
+import { markdown } from '@codemirror/lang-markdown'
+import { python } from '@codemirror/lang-python'
+import { html } from '@codemirror/lang-html'
+import { css } from '@codemirror/lang-css'
+import { yaml } from '@codemirror/lang-yaml'
+import { xml } from '@codemirror/lang-xml'
+import { sql } from '@codemirror/lang-sql'
+import { java } from '@codemirror/lang-java'
+import { cpp } from '@codemirror/lang-cpp'
+import { rust } from '@codemirror/lang-rust'
+import { go } from '@codemirror/lang-go'
+import { php } from '@codemirror/lang-php'
+import { vue } from '@codemirror/lang-vue'
+import { sass } from '@codemirror/lang-sass'
+import { less } from '@codemirror/lang-less'
+import { StreamLanguage } from '@codemirror/language'
+import { toml } from '@codemirror/legacy-modes/mode/toml'
+import { powerShell } from '@codemirror/legacy-modes/mode/powershell'
+import { shell } from '@codemirror/legacy-modes/mode/shell'
+import { batchLanguage } from '../batch-mode.ts'
+import { apiGitBlame, apiRead, apiReadBinary, apiRun, apiWrite } from '../api.ts'
+import type { BlameLine, RunResult } from '../api.ts'
+import type { EditorTab } from '../store.ts'
+import { isImagePath } from '../../core/media.ts'
+import { encodingLabel, TEXT_ENCODING_CHOICES } from '../../core/encoding.ts'
+// 仅类型 import（浏览器纯度门：不 value-import dsh-lsp-core）。
+import type { LanguageCapability, LspCapabilityService } from 'dsh-lsp-core/client'
+// 工具函数走本地副本（lsp-client.ts）：纯度门禁止 value-import dsh-lsp-core——
+// 纯函数双副本无害（无 instanceof/无状态），这是布局插件侧的必要拷贝。
+import {
+  completionInfo, completionTextRange, completionType, normalizeUri, pathToUri, signatureParameterRange,
+  type LspDiagnostic, type LspLocation, type LspPosition, type LspRange, type LspSignatureHelp, type LspTextEdit,
+} from '../lsp-client.ts'
+import { TerminalPane } from './TerminalPane.tsx'
+
+interface EditorPaneProps {
+  root: string
+  tabs: EditorTab[]
+  activeTabId: string | null
+  onActivate: (id: string) => void
+  onClose: (id: string) => void
+  onContentChange: (id: string, content: string) => void
+  onDirtySave: (tab: EditorTab) => void
+  onCloseEditor: () => void
+  /** 把选中代码交给内置 agent（追加到聊天输入框）。 */
+  onAskAgent: (text: string, path: string) => void
+  /** 打开一个文件（相对路径），可选定位到指定行（0-based）。 */
+  onOpenFile: (path: string, line?: number) => void
+  /** LSP 诊断推送上抛（写入 IdeState.diagnostics，供问题面板聚合）。 */
+  onDiagnostics: (uri: string, diagnostics: LspDiagnostic[]) => void
+  /** 编码切换后以新内容整体替换 tab（content/encoding/mtime/dirty 一起更新）。 */
+  onReloadTab: (tab: EditorTab) => void
+  /** dsh-lsp-core 能力工厂（阶段 1：Python 新链路；缺省 = 未安装，走旧 LspClient）。 */
+  lspCapabilities?: LspCapabilityService
+}
+
+/** Pick a CodeMirror language by file extension.
+ *  一律用本 bundle 内置语法表：CodeMirror 扩展对象跨 bundle 会因
+ *  @codemirror/state 双副本抛 "Unrecognized extension value"（.py 打不开
+ *  的根因）。语言插件注册表只提供 LSP 服务器配置，不提供语法工厂
+ *  （待阶段 2 codemirror 单来源后再回归注册表 syntax）。 */
+function languageFor(path: string): Extension {
+  const ext = (path.split('.').pop() ?? '').toLowerCase()
+  switch (ext) {
+    case 'js': case 'mjs': case 'cjs': return javascript()
+    case 'jsx': return javascript({ jsx: true })
+    case 'ts': return javascript({ typescript: true })
+    case 'tsx': case 'mts': case 'cts': return javascript({ typescript: true, jsx: true })
+    case 'json': case 'jsonc': case 'map': return json()
+    case 'md': case 'markdown': return markdown()
+    case 'py': case 'pyw': return python()
+    case 'html': case 'htm': return html()
+    case 'css': return css()
+    case 'yaml': case 'yml': return yaml()
+    case 'xml': case 'svg': case 'xsl': case 'plist': return xml()
+    case 'sql': case 'mysql': case 'pgsql': return sql()
+    case 'java': return java()
+    case 'c': case 'h': case 'cc': case 'cpp': case 'cxx': case 'hpp': case 'hh': return cpp()
+    case 'rs': return rust()
+    case 'go': return go()
+    case 'php': return php()
+    case 'vue': return vue()
+    case 'scss': return sass()
+    case 'less': return less()
+    case 'toml': return StreamLanguage.define(toml)
+    case 'cmd': case 'bat': return batchLanguage
+    case 'ps1': case 'psm1': case 'psd1': return StreamLanguage.define(powerShell)
+    case 'sh': case 'bash': case 'zsh': return StreamLanguage.define(shell)
+    default: return []
+  }
+}
+
+/** 高对比高亮：经典 IDE 配色（关键字深蓝加粗 / 注释绿斜体 / 字符串暖棕 / 数字深绿）。
+ *  配色刻意避开红色系：红色只留给 LSP 诊断的「红色下波浪线」（错误语义唯一来源），
+ *  避免普通高亮被误认成报错。颜色用 CSS 变量承载：默认亮色系（浅背景），
+ *  皮肤（如 maid-atelier）可在自己的 CSS 里按亮/暗主题覆盖变量适配深背景。 */
+const ideHighlight = HighlightStyle.define([
+  { tag: [t.keyword, t.controlKeyword, t.moduleKeyword, t.operatorKeyword, t.definitionKeyword], color: 'var(--ide-hl-keyword, #0000FF)', fontWeight: '600' },
+  { tag: [t.comment, t.lineComment, t.blockComment, t.docComment], color: 'var(--ide-hl-comment, #008000)', fontStyle: 'italic' },
+  // 字符串用暖棕（避开 #A31515 深红，防止与错误提示混淆）。
+  { tag: [t.string, t.special(t.string), t.character], color: 'var(--ide-hl-string, #B45309)' },
+  { tag: [t.number, t.integer, t.float], color: 'var(--ide-hl-number, #098658)' },
+  { tag: [t.bool, t.null, t.atom], color: 'var(--ide-hl-bool, #0000FF)' },
+  { tag: [t.function(t.variableName), t.definition(t.function(t.variableName))], color: 'var(--ide-hl-function, #795E26)' },
+  { tag: [t.className, t.typeName, t.definition(t.className)], color: 'var(--ide-hl-class, #267F99)' },
+  { tag: [t.propertyName], color: 'var(--ide-hl-property, #0070C1)' },
+  { tag: [t.definition(t.variableName)], color: 'var(--ide-hl-variable, #001080)' },
+  // invalid 高亮改中性灰：真正的语法错误由 LSP 红色波浪线表达（红线只此一处语义）。
+  { tag: t.invalid, color: 'var(--ide-hl-invalid, #6B7280)' },
+  // 兜底：未显式覆盖的符号类 tag 统一用主文字色（防语言包/默认 style 带红色系）。
+  { tag: [t.operator, t.punctuation, t.bracket, t.separator, t.attributeName, t.meta, t.processingInstruction], color: 'var(--ide-hl-base, #24292F)' },
+  // Markdown：标题加粗深蓝 / 强调斜体 / 链接下划线蓝 / 引用与行内代码 / 删除线灰。
+  { tag: [t.heading, t.heading1, t.heading2, t.heading3, t.heading4, t.heading5, t.heading6], color: 'var(--ide-hl-heading, #0000FF)', fontWeight: '600' },
+  { tag: [t.emphasis, t.strong], color: 'var(--ide-hl-emphasis, #795E26)', fontStyle: 'italic' },
+  { tag: [t.link, t.url], color: 'var(--ide-hl-link, #0070C1)', textDecoration: 'underline' },
+  { tag: [t.quote, t.monospace], color: 'var(--ide-hl-quote, #008000)' },
+  { tag: t.strikethrough, color: 'var(--ide-hl-strikethrough, #9ca3af)' },
+])
+
+/** GitLens 式行内 blame：超过该行数的文件不自动标注（输出量与行数线性相关）。 */
+const BLAME_MAX_LINES = 2000
+
+/** 相对时间（GitLens 风格）：刚刚 / N 分钟前 / N 小时前 / N 天前 / 日期。 */
+function relativeTime(unix: number): string {
+  if (unix <= 0) return ''
+  const diff = Date.now() / 1000 - unix
+  if (diff < 60) return '刚刚'
+  if (diff < 3600) return `${Math.floor(diff / 60)} 分钟前`
+  if (diff < 86_400) return `${Math.floor(diff / 3600)} 小时前`
+  if (diff < 86_400 * 30) return `${Math.floor(diff / 86_400)} 天前`
+  const date = new Date(unix * 1000)
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+}
+
+/** 是否未提交行（空或全 0 hash）。 */
+function isUncommitted(hash: string): boolean {
+  return hash === '' || /^0+$/.test(hash)
+}
+
+/** 短 hash（7 位）；未提交行返回 null。 */
+function shortHash(hash: string): string | null {
+  if (isUncommitted(hash)) return null
+  return hash.slice(0, 7)
+}
+
+/** blame 悬停详情浮层 DOM（作者/日期/提交信息/hash，复用浮层样式变量）。 */
+function blameTooltipDom(info: BlameLine): HTMLElement {
+  const container = document.createElement('div')
+  container.style.cssText = [
+    'max-width: 460px', 'font-size: 12px', 'line-height: 1.6',
+    'padding: 8px 10px', 'border-radius: 6px',
+    'background: var(--dsw-alias-bg-overlay, rgba(248,250,255,0.98))',
+    'color: var(--dsw-alias-label-primary, #1a1a1a)',
+    'border: 1px solid var(--ide-border, #e5e6eb)',
+    'box-shadow: 0 8px 24px rgba(0,0,0,0.28)',
+  ].join('; ')
+  const rows: Array<[string, string]> = []
+  if (isUncommitted(info.hash)) {
+    rows.push(['状态', '未提交（工作区改动）'])
+  } else {
+    rows.push(['提交', info.hash])
+    rows.push(['作者', info.mail !== '' ? `${info.author} <${info.mail}>` : info.author])
+    const rel = relativeTime(info.time)
+    rows.push(['日期', rel !== '' ? `${rel}（${new Date(info.time * 1000).toLocaleString()}）` : ''])
+  }
+  rows.push(['说明', info.summary])
+  for (const [label, value] of rows) {
+    if (value === '') continue
+    const row = document.createElement('div')
+    row.style.cssText = 'display: flex; gap: 8px;'
+    const labelEl = document.createElement('span')
+    labelEl.style.cssText = 'flex: 0 0 44px; color: #9ca3af; white-space: nowrap;'
+    labelEl.textContent = label
+    const valueEl = document.createElement('span')
+    valueEl.style.cssText = 'flex: 1; word-break: break-all;'
+    valueEl.textContent = value
+    row.appendChild(labelEl)
+    row.appendChild(valueEl)
+    container.appendChild(row)
+  }
+  return container
+}
+
+/** blame 悬停浮层单例（marker 重建/移出视口时不会触发 mouseleave，靠单例清理）。 */
+let blameTooltipEl: HTMLElement | null = null
+function showBlameTooltip(anchor: HTMLElement, info: BlameLine): void {
+  hideBlameTooltip()
+  const el = blameTooltipDom(info)
+  el.style.position = 'fixed'
+  el.style.zIndex = '2147483000'
+  document.body.appendChild(el)
+  blameTooltipEl = el
+  const rect = anchor.getBoundingClientRect()
+  const width = Math.min(460, window.innerWidth - 16)
+  let left = rect.left
+  if (left + width > window.innerWidth - 8) left = Math.max(8, window.innerWidth - width - 8)
+  el.style.width = `${width}px`
+  el.style.left = `${left}px`
+  el.style.top = `${Math.max(4, rect.top - el.offsetHeight - 6)}px`
+}
+function hideBlameTooltip(): void {
+  if (blameTooltipEl !== null) {
+    blameTooltipEl.remove()
+    blameTooltipEl = null
+  }
+}
+
+interface CodeMirrorPaneProps {
+  tab: EditorTab
+  onContentChange: (id: string, content: string) => void
+  onSave: (tab: EditorTab) => void
+  /** 编辑器内右键菜单回调（选中文本非空时触发）。 */
+  onContextAction: (kind: 'ask-agent' | 'copy', text: string) => void
+  /** LSP 客户端（当前 root 一个，可为 null = 未启用）。统一 LanguageCapability 接口：
+   *  旧 ts/ps/java 用 LspClient（已实现接口），Python 用 dsh-lsp-core 的 LspSession。 */
+  lsp: LanguageCapability | null
+  /** 当前文件的最新 LSP 诊断（EditorPane 层按 uri 缓存）。 */
+  diagnostics: LspDiagnostic[]
+  /** 跳转定义：把目标文件（相对路径 + 行）交给 EditorPane 打开。 */
+  onOpenLocation: (path: string, line: number) => void
+  /** 打开本文件后要定位到的行（0-based；null = 不定位）。 */
+  revealLine: number | null
+  /** 定位完成后清空 revealLine。 */
+  onRevealDone: () => void
+  /** 工作区根目录（用于 uri 归一化匹配 / 跨文件写盘）。 */
+  root: string
+  /** 光标位置变化回调（状态栏行列显示）。 */
+  onCursor?: (line: number, column: number) => void
+  /** 编辑器字号（px，Ctrl/Cmd+滚轮调整）。 */
+  fontSize: number
+  /** 字号变化回调（Ctrl/Cmd+滚轮），父层持久化并显示。 */
+  onFontSizeChange: (size: number) => void
+  /** 本文件的 git blame（1-based 行号→提交信息，升序）；null = 无 blame。 */
+  blame: BlameLine[] | null
+  /** 整文件 blame gutter 是否启用（关闭时整个 gutter 列不渲染，不占空间）。 */
+  blameEnabled: boolean
+}
+
+/** LSP 0-based {line, character} → CodeMirror 文档 offset。 */
+function lspPosToOffset(doc: Text, pos: LspPosition): number {
+  const line = doc.line(pos.line + 1)
+  return Math.min(line.from + Math.max(0, pos.character), line.to)
+}
+
+/** LSP Diagnostic → CodeMirror linter Diagnostic（offset 表示）。 */
+function toCmDiagnostic(doc: Text, diagnostic: LspDiagnostic): Diagnostic {
+  let severity: 'error' | 'warning' | 'info' = 'error'
+  if (diagnostic.severity === 2) severity = 'warning'
+  else if (diagnostic.severity === 3 || diagnostic.severity === 4) severity = 'info'
+  return {
+    from: lspPosToOffset(doc, diagnostic.range.start),
+    to: lspPosToOffset(doc, diagnostic.range.end),
+    severity,
+    message: diagnostic.message,
+  }
+}
+
+/** 补全触发前最宽（保守）的单词匹配：从当前光标往前取标识符字符。 */
+function matchWordAt(context: CompletionContext): { from: number; text: string } | null {
+  const match = context.matchBefore(/[\w$]+/)
+  if (match === null) return null
+  return { from: match.from, text: match.text }
+}
+
+/** 把 LSP hover 的 contents（MarkupContent / MarkedString[]）渲染成 tooltip DOM。
+ *  纯文本直接换行；含代码块（```lang）时按 code 渲染。
+ *  滚轮优先悬停栏：内容可滚动时 wheel 由 tooltip 自己消费（不冒泡给页面），
+ *  滚到边界后停止——页面不会跟着滚。 */
+function renderHoverDom(contents: unknown): HTMLElement {
+  const container = document.createElement('div')
+  // 皮肤会把 --dsw-alias-bg-base 全局透明化：tooltip 浮层必须自带不透明背景
+  // + 文字色 + 边框，否则透出底下代码看不清。
+  container.style.cssText = [
+    'max-width: 480px', 'max-height: 320px', 'overflow: auto',
+    'font-size: 13px', 'line-height: 1.5',
+    'padding: 8px 10px', 'border-radius: 6px',
+    'background: var(--dsw-alias-bg-overlay, rgba(248,250,255,0.98))',
+    'color: var(--dsw-alias-label-primary, #1a1a1a)',
+    'border: 1px solid var(--ide-border, #e5e6eb)',
+    'box-shadow: 0 8px 24px rgba(0,0,0,0.28)',
+  ].join('; ')
+  // 滚轮优先：tooltip 内可滚动时接管 wheel；到边界后 stopPropagation（页面不动）。
+  container.addEventListener('wheel', (event) => {
+    const { scrollTop, scrollHeight, clientHeight } = container
+    const canScroll = scrollHeight > clientHeight
+    if (!canScroll) {
+      event.stopPropagation()
+      return
+    }
+    event.preventDefault()
+    event.stopPropagation()
+    const atTop = scrollTop <= 0
+    const atBottom = scrollTop + clientHeight >= scrollHeight - 1
+    // 方向朝外（顶部再往上滚 / 底部再往下滚）时不滚，但也吞掉事件（页面不动）。
+    if (!(atTop && event.deltaY < 0) && !(atBottom && event.deltaY > 0)) {
+      container.scrollTop += event.deltaY
+    }
+  }, { passive: false })
+  const parts: Array<{ text: string; code: boolean; language?: string }> = []
+  const pushString = (text: string): void => {
+    // 拆出 ```lang ... ``` 代码块，其余按纯文本。
+    const regex = /```([\w+-]*)\n?([\s\S]*?)```/g
+    let last = 0
+    let match: RegExpExecArray | null
+    while ((match = regex.exec(text)) !== null) {
+      if (match.index > last) parts.push({ text: text.slice(last, match.index), code: false })
+      parts.push({ text: match[2].trimEnd(), code: true, language: match[1] })
+      last = match.index + match[0].length
+    }
+    if (last < text.length) parts.push({ text: text.slice(last), code: false })
+  }
+  const value = contents as unknown
+  if (typeof value === 'string') {
+    pushString(value)
+  } else if (Array.isArray(value)) {
+    for (const item of value) {
+      if (typeof item === 'string') pushString(item)
+      else if (item !== null && typeof item === 'object') pushString(String((item as { value?: unknown }).value ?? ''))
+    }
+  } else if (value !== null && typeof value === 'object' && 'value' in (value as Record<string, unknown>)) {
+    pushString(String((value as Record<string, unknown>).value))
+  }
+  for (const part of parts) {
+    const el = document.createElement(part.code ? 'pre' : 'div')
+    el.style.cssText = part.code
+      ? 'margin: 2px 0; padding: 4px 6px; border-radius: 4px; background: rgba(127,127,127,0.12); font-family: "Cascadia Code", Consolas, monospace; font-size: 12px; white-space: pre-wrap; word-break: break-word;'
+      : 'margin: 1px 0; white-space: pre-wrap; word-break: break-word;'
+    el.textContent = part.text
+    container.appendChild(el)
+  }
+  return container
+}
+
+/** 从 CodeMirror 状态里把 LSP hover 范围转成 tooltip 的 pos/end（可选）。
+ *  注意：client 必须从 propsRef 读取（LSP 连接是异步建立的，mount 时可能
+ *  还是 null；用闭包捕获会永远拿到 null → 悬停不工作）。 */
+const signatureTooltipEffect = StateEffect.define<Tooltip | null>()
+const signatureTooltipField = StateField.define<Tooltip | null>({
+  create: () => null,
+  update: (value, transaction) => {
+    for (const effect of transaction.effects) {
+      if (effect.is(signatureTooltipEffect)) return effect.value
+    }
+    return transaction.docChanged || transaction.selection !== undefined ? null : value
+  },
+})
+
+function shouldAutoCompleteAfterImport(doc: Text, pos: number): boolean {
+  const line = doc.lineAt(pos)
+  const before = doc.sliceString(line.from, pos)
+  if (!/[ .]$/.test(before)) return false
+  return /^\s*(?:from\s+[\w.]+\s+import|import(?:\s+[\w.]*)?)\s*$/.test(before)
+}
+
+function shouldRequestSignature(doc: Text, pos: number): boolean {
+  const line = doc.lineAt(pos)
+  const before = doc.sliceString(line.from, pos)
+  let depth = 0
+  for (let index = before.length - 1; index >= 0; index--) {
+    const char = before[index]
+    if (char === ')') depth += 1
+    else if (char === '(') {
+      if (depth === 0) return true
+      depth -= 1
+    }
+  }
+  return false
+}
+
+function renderSignatureDom(help: LspSignatureHelp): HTMLElement {
+  const container = document.createElement('div')
+  container.style.cssText = [
+    'max-width: 620px', 'max-height: 180px', 'overflow: auto', 'padding: 8px 10px',
+    'border-radius: 6px', 'background: var(--dsw-alias-bg-overlay, rgba(248,250,255,0.98))',
+    'color: var(--dsw-alias-label-primary, #1a1a1a)', 'border: 1px solid var(--ide-accent, #4f8cff)',
+    'box-shadow: 0 8px 24px rgba(0,0,0,0.28)', 'font: 13px/1.5 "Cascadia Code", Consolas, monospace',
+    'white-space: pre-wrap', 'word-break: break-word',
+  ].join('; ')
+  const value = signatureParameterRange(help)
+  if (value === null) return container
+  const label = document.createElement('div')
+  const before = value.activeFrom >= 0 ? value.label.slice(0, value.activeFrom) : value.label
+  const active = value.activeFrom >= 0 ? value.label.slice(value.activeFrom, value.activeTo) : ''
+  const after = value.activeFrom >= 0 ? value.label.slice(value.activeTo) : ''
+  label.append(document.createTextNode(before))
+  if (active !== '') {
+    const mark = document.createElement('strong')
+    mark.style.color = 'var(--ide-accent, #2563eb)'
+    mark.textContent = active
+    label.append(mark)
+  }
+  label.append(document.createTextNode(after))
+  container.append(label)
+  const documentation = value !== null ? help.signatures[help.activeSignature ?? 0]?.documentation : undefined
+  const info = completionInfo(documentation)
+  if (info !== undefined && info !== '') {
+    const doc = document.createElement('div')
+    doc.style.cssText = 'margin-top: 6px; color: #6b7280; font-family: inherit;'
+    doc.textContent = info
+    container.append(doc)
+  }
+  return container
+}
+
+function hoverTooltipFor(
+  getClient: () => LanguageCapability | null,
+  path: () => string,
+): (view: EditorView, pos: number) => Promise<Tooltip | null> {
+  return async (view, pos) => {
+    const client = getClient()
+    if (client === null) return null
+    const position: LspPosition = {
+      line: view.state.doc.lineAt(pos).number - 1,
+      character: pos - view.state.doc.lineAt(pos).from,
+    }
+    const hover = await client.hover(path(), position)
+    if (hover === null) return null
+    return {
+      pos,
+      create: () => ({ dom: renderHoverDom(hover.contents) }),
+    }
+  }
+}
+
+/** 当前 CodeMirrorPane 的跳转定义回调（F12 / Ctrl+点击共用）。 */
+interface JumpProps {
+  lsp: LanguageCapability | null
+  tab: EditorTab
+  root: string
+  onOpenLocation: (path: string, line: number) => void
+  onContentChange: (id: string, content: string) => void
+}
+
+/** F12 / Ctrl+点击 → 请求 textDocument/definition，把首个定位交给 EditorPane。 */
+function jumpToDefinition(view: EditorView, props: JumpProps): boolean {
+  const client = props.lsp
+  if (client === null) return false
+  const cursor = view.state.selection.main.head
+  const position: LspPosition = {
+    line: view.state.doc.lineAt(cursor).number - 1,
+    character: cursor - view.state.doc.lineAt(cursor).from,
+  }
+  void client.definition(props.tab.path, position).then((locations) => {
+    if (locations.length === 0) return
+    const first = locations[0]
+    props.onOpenLocation(first.uri, first.range.start.line)
+  }).catch(() => { /* 忽略：定义不可达时静默 */ })
+  return true
+}
+
+/** 菜单按钮统一样式（与皮肤 overlay 变量配套）。 */
+function menuItemStyle(): React.CSSProperties {
+  return {
+    display: 'block', width: '100%', textAlign: 'left', padding: '5px 14px',
+    border: 'none', background: 'transparent', color: 'inherit',
+    fontSize: 13, cursor: 'pointer', fontFamily: 'inherit',
+  }
+}
+
+/** 菜单项按钮：hover 时背景加深（内联样式表达不了 :hover，用 hover 状态切换）。
+ *  半透明灰在亮/暗浮层上都可见，与皮肤 overlay 变量兼容。 */
+function MenuItemButton({ onClick, children }: { onClick: () => void; children: React.ReactNode }): JSX.Element {
+  const [hover, setHover] = useState(false)
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{ ...menuItemStyle(), background: hover ? 'rgba(127,127,127,0.12)' : 'transparent' }}
+    >
+      {children}
+    </button>
+  )
+}
+
+/** 取光标所在处的标识符单词（向前向后扩展 [\w$]）。 */
+function wordAt(view: EditorView, pos: number): string | null {
+  const doc = view.state.doc
+  const line = doc.lineAt(pos)
+  const before = doc.sliceString(line.from, pos)
+  const after = doc.sliceString(pos, line.to)
+  const head = /[\w$]*$/.exec(before)?.[0] ?? ''
+  const tail = /^[\w$]*/.exec(after)?.[0] ?? ''
+  const word = head + tail
+  return word === '' ? null : word
+}
+
+/** offset → LSP 0-based position。 */
+function offsetToLsp(doc: Text, offset: number): LspPosition {
+  const line = doc.lineAt(offset)
+  return { line: line.number - 1, character: offset - line.from }
+}
+
+/** 把 WorkspaceEdit 应用到编辑器：当前文件的 edits 走 view.dispatch（倒序防偏移），
+ *  其他文件的 edits 直接写盘（apiWrite，root 内路径）。返回受影响文件数。 */
+async function applyWorkspaceEdit(
+  view: EditorView,
+  props: JumpProps,
+  edit: { changes?: Record<string, LspTextEdit[]>; documentChanges?: Array<{ textDocument: { uri: string }; edits: LspTextEdit[] }> },
+): Promise<number> {
+  const changes = edit.documentChanges ?? Object.entries(edit.changes ?? {}).map(([uri, edits]) => ({ textDocument: { uri }, edits }))
+  const ownUri = normalizeUri(pathToUri(props.root, props.tab.path))
+  let touched = 0
+  for (const change of changes) {
+    const uri = normalizeUri(change.textDocument.uri)
+    if (uri === ownUri) {
+      // 当前文件：编辑器内应用（倒序，从后往前避免位置漂移）。
+      const sorted = [...change.edits].sort((a, b) => b.range.start.line - a.range.start.line || b.range.start.character - a.range.start.character)
+      let applied = false
+      for (const textEdit of sorted) {
+        const from = lspPosToOffset(view.state.doc, textEdit.range.start)
+        const to = lspPosToOffset(view.state.doc, textEdit.range.end)
+        view.dispatch({ changes: { from, to, insert: textEdit.newText } })
+        applied = true
+      }
+      if (applied) props.onContentChange(props.tab.id, view.state.doc.toString())
+      touched += 1
+    } else if (props.root !== '') {
+      // 其他文件：read → 应用 edits → write 回盘。
+      const decoded = normalizeUri(uri).replace(/^file:\/\//, '').replace(/^\//, '')
+      const rootUri = normalizeUri(pathToUri(props.root, '')).replace(/^file:\/\//, '').replace(/^\//, '')
+      const rel = decoded.toLowerCase().startsWith(rootUri.toLowerCase())
+        ? decoded.slice(rootUri.length).replace(/^[\\/]/, '')
+        : null
+      if (rel === null || rel === '') continue
+      // P1-07：跨文件写入必须带读取时的 baseMtime（冲突检测），且拒绝截断/二进制文件
+      // —— 防止静默覆盖外部工具刚写入的内容。
+      const read = await apiRead(props.root, rel)
+      if (!read.ok) continue
+      if (read.value.truncated === true) continue
+      const sorted = [...change.edits].sort((a, b) => b.range.start.line - a.range.start.line || b.range.start.character - a.range.start.character)
+      let content = read.value.content
+      const lines = content.split('\n')
+      for (const textEdit of sorted) {
+        const start = offsetFromLines(lines, textEdit.range.start)
+        const end = offsetFromLines(lines, textEdit.range.end)
+        if (start === -1 || end === -1) continue
+        content = content.slice(0, start) + textEdit.newText + content.slice(end)
+        lines.splice(0, lines.length, ...content.split('\n'))
+      }
+      // 写回时沿用读取时的编码（非 UTF-8 文件被 LSP 跨文件编辑时保持原编码）。
+      const written = await apiWrite(props.root, rel, content, read.value.mtime, read.value.encoding)
+      if (written.ok) touched += 1
+    }
+  }
+  return touched
+}
+
+/** 由行列表计算 (line, char) 的字符偏移。 */
+function offsetFromLines(lines: string[], pos: LspPosition): number {
+  if (pos.line < 0 || pos.line >= lines.length) return -1
+  let offset = 0
+  for (let i = 0; i < pos.line; i++) offset += lines[i].length + 1
+  return offset + Math.min(pos.character, lines[pos.line].length)
+}
+
+/** 重命名：请求 LSP rename，应用 WorkspaceEdit。 */
+async function doRename(view: EditorView, props: JumpProps, newName: string): Promise<void> {
+  const client = props.lsp
+  if (client === null) return
+  const cursor = view.state.selection.main.head
+  const edit = await client.rename(props.tab.path, offsetToLsp(view.state.doc, cursor), newName)
+  if (edit === null) return
+  await applyWorkspaceEdit(view, props, edit)
+}
+
+/** 格式化：请求 LSP formatting，把 TextEdit[] 应用到当前文档。 */
+async function formatDocument(view: EditorView, props: JumpProps): Promise<void> {
+  const client = props.lsp
+  if (client === null) return
+  const edits = await client.formatting(props.tab.path)
+  if (edits.length === 0) return
+  const sorted = [...edits].sort((a, b) => b.range.start.line - a.range.start.line || b.range.start.character - a.range.start.character)
+  // 倒序逐条 dispatch：每条都基于最新 doc，位置不漂移。
+  for (const textEdit of sorted) {
+    const from = lspPosToOffset(view.state.doc, textEdit.range.start)
+    const to = lspPosToOffset(view.state.doc, textEdit.range.end)
+    view.dispatch({ changes: { from, to, insert: textEdit.newText } })
+  }
+  props.onContentChange(props.tab.id, view.state.doc.toString())
+}
+
+/** 快速修复：请求光标处 codeAction，返回菜单项列表（apply 回调已绑定）。 */
+async function codeActionsFor(
+  view: EditorView,
+  props: JumpProps,
+  cursor: number,
+): Promise<Array<{ title: string; apply: () => void }>> {
+  const client = props.lsp
+  if (client === null) return []
+  const line = view.state.doc.lineAt(cursor)
+  const range: LspRange = { start: { line: line.number - 1, character: 0 }, end: { line: line.number - 1, character: line.length } }
+  const actions = await client.codeAction(props.tab.path, range)
+  return actions.map((action) => ({
+    title: action.title,
+    apply: () => {
+      if (action.edit !== undefined) {
+        void applyWorkspaceEdit(view, props, action.edit)
+      }
+      // command 类修复（如 organize imports 的 executeCommand）暂不支持。
+    },
+  }))
+}
+
+/** 位图预览（只读，VS Code 式）：滚轮缩放、双击回到适合窗口、底部信息条。
+ *  tab.content 为 data URL（host readBinary 返回 base64）。 */
+function ImagePreview({ tab }: { tab: EditorTab }): JSX.Element {
+  const [natural, setNatural] = useState<{ w: number; h: number } | null>(null)
+  const [scale, setScale] = useState(1)
+  const [fit, setFit] = useState(true)
+  const boxRef = useRef<HTMLDivElement | null>(null)
+
+  // 滚轮缩放：任意滚轮即缩放（预览区无滚动需求），退出「适合窗口」模式。
+  useEffect(() => {
+    const box = boxRef.current
+    if (box === null) return
+    const onWheel = (event: WheelEvent): void => {
+      event.preventDefault()
+      const factor = event.deltaY < 0 ? 1.1 : 1 / 1.1
+      setFit(false)
+      setScale((prev) => Math.min(8, Math.max(0.05, prev * factor)))
+    }
+    box.addEventListener('wheel', onWheel, { passive: false })
+    return () => box.removeEventListener('wheel', onWheel)
+  }, [])
+
+  const resetFit = (): void => {
+    setFit(true)
+    setScale(1)
+  }
+  const zoomStep = (dir: 1 | -1): void => {
+    setFit(false)
+    setScale((prev) => Math.min(8, Math.max(0.05, prev * (dir === 1 ? 1.25 : 0.8))))
+  }
+  const zoomLabel = fit ? '适合窗口' : `${Math.round(scale * 100)}%`
+  return (
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden' }}>
+      <div
+        ref={boxRef}
+        style={{
+          flex: 1, minHeight: 0, overflow: 'auto', display: 'flex', alignItems: 'center', justifyContent: 'center',
+          background: 'var(--dsw-alias-bg-base,#ffffff)',
+        }}
+      >
+        <img
+          src={tab.content}
+          alt={tab.title}
+          draggable={false}
+          onLoad={(event) => {
+            const img = event.currentTarget
+            setNatural({ w: img.naturalWidth, h: img.naturalHeight })
+          }}
+          onDoubleClick={resetFit}
+          title="双击回到适合窗口"
+          style={{
+            maxWidth: fit ? '100%' : undefined,
+            maxHeight: fit ? '100%' : undefined,
+            width: !fit && natural !== null ? Math.max(1, Math.round(natural.w * scale)) : undefined,
+            height: !fit && natural !== null ? 'auto' : undefined,
+            objectFit: 'contain', userSelect: 'none', cursor: 'zoom-in', flexShrink: 0,
+          }}
+        />
+      </div>
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 10, padding: '4px 10px', flexShrink: 0,
+        fontSize: 12, color: '#6b7280', borderTop: '1px solid var(--ide-border,#e5e6eb)',
+      }}>
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{tab.path}</span>
+        <span>{natural !== null ? `${natural.w} × ${natural.h} px` : '加载中…'}</span>
+        <span style={{ marginLeft: 'auto', display: 'flex', gap: 6, alignItems: 'center' }}>
+          <button
+            onClick={() => zoomStep(-1)}
+            title="缩小"
+            style={{ padding: '1px 8px', fontSize: 12, cursor: 'pointer', color: '#6b7280', background: 'transparent', border: '1px solid var(--ide-border,#e5e6eb)', borderRadius: 4, fontFamily: 'inherit' }}
+          >−</button>
+          <span style={{ minWidth: 56, textAlign: 'center' }}>{zoomLabel}</span>
+          <button
+            onClick={() => zoomStep(1)}
+            title="放大"
+            style={{ padding: '1px 8px', fontSize: 12, cursor: 'pointer', color: '#6b7280', background: 'transparent', border: '1px solid var(--ide-border,#e5e6eb)', borderRadius: 4, fontFamily: 'inherit' }}
+          >+</button>
+          <button
+            onClick={resetFit}
+            title="缩放到适合窗口"
+            style={{ padding: '1px 8px', fontSize: 12, cursor: 'pointer', color: '#6b7280', background: 'transparent', border: '1px solid var(--ide-border,#e5e6eb)', borderRadius: 4, fontFamily: 'inherit' }}
+          >⤢ 适合</button>
+          <button
+            onClick={() => { setFit(false); setScale(1) }}
+            title="显示原始大小"
+            style={{ padding: '1px 8px', fontSize: 12, cursor: 'pointer', color: '#6b7280', background: 'transparent', border: '1px solid var(--ide-border,#e5e6eb)', borderRadius: 4, fontFamily: 'inherit' }}
+          >1:1 原始</button>
+        </span>
+      </div>
+    </div>
+  )
+}
+
+/** One CodeMirror instance per tab. The parent remounts this component via
+ * `key={tab.id}` on tab switch; the view is created once on mount and
+ * destroyed on unmount (non-controlled: doc flows out via updateListener). */
+function CodeMirrorPane({ tab, onContentChange, onSave, onContextAction, lsp, diagnostics, onOpenLocation, revealLine, onRevealDone, root, onCursor, fontSize, onFontSizeChange, blame, blameEnabled }: CodeMirrorPaneProps): JSX.Element {
+  const hostRef = useRef<HTMLDivElement | null>(null)
+  const viewRef = useRef<EditorView | null>(null)
+  const signatureRequestRef = useRef(0)
+  const completionRequestRef = useRef(0)
+  // 右键菜单：无选中时也弹出（重命名/格式化/快速修复）；text 为空表示无选中。
+  const [menu, setMenu] = useState<{ text: string; x: number; y: number } | null>(null)
+  // 快速修复子菜单（光标处 codeAction 列表）
+  const [actions, setActions] = useState<{ items: Array<{ title: string; apply: () => void }>; x: number; y: number } | null>(null)
+  // 重命名输入框
+  const [renameBox, setRenameBox] = useState<{ x: number; y: number; initial: string } | null>(null)
+  // Latest props for the mount-time closures (keymap / updateListener / LSP).
+  const propsRef = useRef({ tab, onContentChange, onSave, lsp, diagnostics, onOpenLocation, revealLine, onRevealDone, root, onCursor, fontSize, onFontSizeChange, blame, blameEnabled })
+  propsRef.current = { tab, onContentChange, onSave, lsp, diagnostics, onOpenLocation, revealLine, onRevealDone, root, onCursor, fontSize, onFontSizeChange, blame, blameEnabled }
+  // Blame gutter 的 Compartment：数据异步到达/保存后刷新时 reconfigure 触发
+  // gutter 重建（lineMarker 每次重建读 propsRef 的最新 blame）。实例必须稳定
+  // （每个 tab 一个），用 ref 保证跨渲染一致。
+  const blameCompartmentRef = useRef<Compartment | null>(null)
+  if (blameCompartmentRef.current === null) blameCompartmentRef.current = new Compartment()
+  // Blame gutter：marker 内容 = 短 hash + 作者（未提交行显示「未提交」）。
+  // 悬停显示完整提交详情浮层（单例，mouseleave / 编辑器 mouseleave 时清理）。
+  const blameGutter = gutter({
+    class: 'cm-blame-gutter',
+    lineMarker: (view, line) => {
+      const list = propsRef.current.blame
+      if (list === null || list.length === 0) return null
+      const lineNumber = view.state.doc.lineAt(line.from).number
+      let low = 0
+      let high = list.length - 1
+      let info: BlameLine | null = null
+      while (low <= high) {
+        const mid = (low + high) >> 1
+        const item = list[mid]!
+        if (item.line === lineNumber) { info = item; break }
+        if (item.line < lineNumber) low = mid + 1
+        else high = mid - 1
+      }
+      if (info === null) return null
+      const short = shortHash(info.hash)
+      const text = short !== null ? `${short} ${info.author}` : '未提交'
+      return new class extends GutterMarker {
+        toDOM(): HTMLElement {
+          const marker = document.createElement('span')
+          marker.textContent = text
+          marker.style.cssText = 'white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: default;'
+          marker.addEventListener('mouseenter', () => {
+            marker.style.color = 'var(--ide-hl-keyword, #0000FF)'
+            showBlameTooltip(marker, info)
+          })
+          marker.addEventListener('mouseleave', () => {
+            marker.style.color = ''
+            hideBlameTooltip()
+          })
+          return marker
+        }
+        eq(other: GutterMarker): boolean {
+          return other === this
+        }
+      }()
+    },
+  })
+
+  // Ctrl/Cmd + 滚轮调整编辑器字号（VS Code 习惯）。
+  useEffect(() => {
+    const host = hostRef.current
+    if (host === null) return
+    const onWheel = (event: WheelEvent): void => {
+      if (!(event.ctrlKey || event.metaKey)) return
+      event.preventDefault()
+      const next = Math.min(24, Math.max(9, propsRef.current.fontSize + (event.deltaY < 0 ? 1 : -1)))
+      propsRef.current.onFontSizeChange(next)
+    }
+    host.addEventListener('wheel', onWheel, { passive: false })
+    return () => host.removeEventListener('wheel', onWheel)
+  }, [])
+
+  useEffect(() => {
+    // LSP 扩展是否安装只看当前 tab 有没有 LSP 会话（lsp prop = lspFor 结果，
+    // acquire 未注册语言返回 null），不依赖连接是否已就绪——连接异步建立，
+    // 扩展先装上，source 内部经 propsRef 读最新 lsp（就绪后自动生效）。
+    const lspEnabled = propsRef.current.lsp !== null
+    const view = new EditorView({
+      doc: propsRef.current.tab.content,
+      extensions: [
+        basicSetup,
+        // VS Code 习惯：缩进单位 4 空格、Tab 字符显示宽 4（CodeMirror 默认
+        // indentUnit 是 2 空格——这正是「Enter 换行只缩进两格」的根因）。
+        // 语言包未自设 indentUnit 时全局生效；indentMore/indentLess 也按它插入。
+        indentUnit.of('    '),
+        EditorState.tabSize.of(4),
+        languageFor(propsRef.current.tab.path),
+        // 注意：不能带 { fallback: true } —— 那会让语言自带高亮器（lang-* 的默认配色）优先，
+        // 自定义配色完全失效；不带 fallback 时本高亮器与语言高亮并列，注册靠后 CSS 优先
+        syntaxHighlighting(ideHighlight),
+        EditorView.lineWrapping,
+        // GitLens 式行内 blame gutter：初始空占位，由 useEffect 按
+        // (blameEnabled, blame) 动态 reconfigure —— 未启用时整个 gutter 列
+        // 不渲染（不占空间），启用且有数据时才挂载。
+        blameCompartmentRef.current!.of([]),
+        tooltips({ position: 'fixed', tooltipSpace: (view) => view.dom.getBoundingClientRect() }),
+        signatureTooltipField,
+        showTooltip.from(signatureTooltipField),
+        EditorView.theme({
+          '&': {
+            height: '100%', fontSize: 'var(--ide-editor-font-size, 13px)',
+            backgroundColor: 'var(--dsw-alias-bg-base, #ffffff)',
+            color: 'inherit',
+          },
+          '.cm-scroller': { fontFamily: '"Cascadia Code", Consolas, monospace', lineHeight: '1.6' },
+          '.cm-gutters': {
+            backgroundColor: 'var(--dsw-alias-bg-base, #ffffff)',
+            borderRight: '1px solid rgba(127,127,127,0.2)',
+            color: '#9ca3af',
+          },
+          // GitLens 式 blame gutter：固定宽度 + 超长省略（完整信息走悬停浮层）。
+          '.cm-blame-gutter': { flex: '0 0 118px', borderRight: '1px solid rgba(127,127,127,0.12)' },
+          '.cm-blame-gutter .cm-gutterElement': {
+            width: '118px', boxSizing: 'border-box', padding: '0 6px 0 4px',
+            fontSize: 11, color: '#9ca3af', overflow: 'hidden',
+          },
+          '.cm-activeLine': { backgroundColor: 'rgba(127,127,127,0.08)' },
+          '.cm-activeLineGutter': { backgroundColor: 'rgba(127,127,127,0.08)' },
+          '.cm-selectionBackground, &.cm-focused .cm-selectionBackground': {
+            backgroundColor: 'rgba(64,128,255,0.2)',
+          },
+          '&.cm-focused': { outline: 'none' },
+        }),
+        // P1-04：截断文件只读（readOnly 扩展禁止编辑与输入）。
+        ...(propsRef.current.tab.truncated === true
+          ? [EditorState.readOnly.of(true), EditorView.editable.of(false)]
+          : []),
+        Prec.highest(keymap.of([
+          {
+            key: 'Mod-s',
+            run: () => { propsRef.current.onSave(propsRef.current.tab); return true },
+          },
+          // VS Code 习惯：Tab 先跳 snippet 占位符（补全带 ${1:} 时），否则接受
+          // 补全（未打开时 acceptCompletion 返回 false）；最后落到 indentMore 缩进
+          // （此前直接返回 false → 焦点被移出编辑器，Tab 无法缩进）。Shift+Tab
+          // 反向跳 snippet 占位符 / indentLess 反缩进。
+          {
+            key: 'Tab',
+            run: (view) => {
+              if (hasNextSnippetField(view.state)) return nextSnippetField(view)
+              if (acceptCompletion(view)) return true
+              return indentMore(view)
+            },
+            shift: (view) => {
+              if (hasPrevSnippetField(view.state)) return prevSnippetField(view)
+              return indentLess(view)
+            },
+          },
+          // Ctrl+Space：手动请求补全，尤其覆盖 import 后的空前缀场景。
+          {
+            key: 'Mod-Space',
+            run: (view) => startCompletion(view),
+          },
+          // F12：跳转定义。
+          {
+            key: 'F12',
+            run: (view) => jumpToDefinition(view, propsRef.current),
+          },
+          // F2：重命名符号（LSP textDocument/rename）。
+          {
+            key: 'F2',
+            run: (view) => {
+              const word = wordAt(view, view.state.selection.main.head)
+              const rect = view.coordsAtPos(view.state.selection.main.head)
+              setRenameBox({
+                x: rect !== null ? rect.left : view.dom.getBoundingClientRect().left + 40,
+                y: rect !== null ? rect.bottom + 4 : view.dom.getBoundingClientRect().top + 40,
+                initial: word ?? '',
+              })
+              return true
+            },
+          },
+          // Shift+Alt+F：格式化文档（LSP textDocument/formatting）。
+          {
+            key: 'Shift-Alt-f',
+            run: (view) => { void formatDocument(view, propsRef.current); return true },
+          },
+        ])),
+        // 悬停提示（hover）：鼠标悬停在标识符上显示类型/文档（纯 LSP 请求）。
+        ...(lspEnabled ? [hoverTooltip(
+          hoverTooltipFor(() => propsRef.current.lsp, () => propsRef.current.tab.path),
+          { hoverTime: 350 },
+        )] : []),
+        // Ctrl/Cmd + 点击 → 跳转定义（VS Code 习惯）。
+        ...(lspEnabled ? [EditorView.domEventHandlers({
+          mousedown: (event, view) => {
+            if (!(event.ctrlKey || event.metaKey)) return false
+            const pos = view.posAtCoords({ x: event.clientX, y: event.clientY })
+            if (pos === null) return false
+            event.preventDefault()
+            jumpToDefinition(view, propsRef.current)
+            return true
+          },
+        })] : []),
+        // LSP 补全：override 数组替换语言包自带的本地补全源（由 tsserver 接管）。
+        ...(lspEnabled ? [autocompletion({
+          override: [(context: CompletionContext): Promise<CompletionResult | null> | null => {
+            const client = propsRef.current.lsp
+            if (client === null) return null
+            const path = propsRef.current.tab.path
+            const position: LspPosition = {
+              line: context.state.doc.lineAt(context.pos).number - 1,
+              character: context.pos - context.state.doc.lineAt(context.pos).from,
+            }
+            const requestDoc = context.state.doc.toString()
+            const requestId = ++completionRequestRef.current
+            return client.completion(path, position).then((items) => {
+              // 竞态作废：新请求（source 内 ++）会使旧响应的 requestId 失效；
+              // 此处不能再由 updateListener 递增（autocompletion 先于本 updateListener
+              // 触发 source，若再 ++ 会作废刚发出的请求 → 补全永不显示）。
+              if (requestId !== completionRequestRef.current || items === null) return null
+              const word = matchWordAt(context)
+              const fallback = { from: word !== null ? word.from : context.pos, to: context.pos }
+              return {
+                from: fallback.from,
+                to: fallback.to,
+                options: items.map((item) => {
+                  const range = completionTextRange(item, requestDoc, fallback)
+                  const replacement = item.textEdit?.newText ?? item.insertText ?? item.label
+                  const isSnippet = item.insertTextFormat === 2 && replacement !== item.label
+                  return {
+                    label: item.label,
+                    type: completionType(item.kind),
+                    detail: item.detail,
+                    info: completionInfo(item.documentation),
+                    // snippet 模板（${1:...}）只在替换范围与词范围一致时启用占位符
+                    // 跳转；范围不一致（如 import 类插入）用纯文本替换保证落点正确。
+                    apply: range.from === fallback.from && range.to === fallback.to
+                      ? isSnippet
+                        ? snippet(replacement).apply
+                        : replacement
+                      : (view: EditorView) => {
+                          view.dispatch({ changes: { from: range.from, to: range.to, insert: replacement } })
+                        },
+                    commitCharacters: item.commitCharacters,
+                    sortText: item.sortText,
+                    boost: item.sortText !== undefined ? 0 : 1,
+                  }
+                }),
+              }
+            })
+          }],
+        })] : []),
+        // LSP 诊断：linter source 从 propsRef 拿最新缓存诊断（EditorPane 收到
+        // publishDiagnostics 后 setState → 本组件重渲染 → forceLinting 刷新）。
+        ...(lspEnabled ? [linter((view) => propsRef.current.diagnostics.map((d) => toCmDiagnostic(view.state.doc, d)))] : []),
+        EditorView.updateListener.of((update) => {
+          if (update.selectionSet || update.docChanged) {
+            const head = update.state.selection.main.head
+            // 注意：这里不能再递增 completionRequestRef —— autocompletion 扩展先于
+            // 本 updateListener 触发补全 source，递增会把刚发出的请求作废（补全全消失）。
+            const requestId = ++signatureRequestRef.current
+            const shouldShow = shouldRequestSignature(update.state.doc, head)
+            if (!shouldShow || propsRef.current.lsp === null) {
+              update.view.dispatch({ effects: signatureTooltipEffect.of(null) })
+            } else {
+              const line = update.state.doc.lineAt(head)
+              const position: LspPosition = { line: line.number - 1, character: head - line.from }
+              const path = propsRef.current.tab.path
+              void propsRef.current.lsp.signatureHelp(path, position).then((help) => {
+                if (requestId !== signatureRequestRef.current || help === null || help.signatures.length === 0) return
+                update.view.dispatch({ effects: signatureTooltipEffect.of({
+                  pos: head,
+                  above: false,
+                  strictSide: false,
+                  arrow: true,
+                  create: () => ({ dom: renderSignatureDom(help) }),
+                }) })
+              })
+            }
+          }
+          if (update.docChanged) {
+            const content = update.state.doc.toString()
+            propsRef.current.onContentChange(propsRef.current.tab.id, content)
+            // 同步全量文本给 LSP（didChange，版本号内部递增）。
+            propsRef.current.lsp?.updateDocument(propsRef.current.tab.path, content)
+             // import/from import 后的空前缀需要主动唤起补全；CodeMirror 默认只在
+             // 标识符输入后触发，刚输入空格时容易不弹出候选。
+             if (shouldAutoCompleteAfterImport(update.state.doc, update.state.selection.main.head)) {
+               startCompletion(update.view)
+             }
+          }
+          if (update.selectionSet || update.docChanged) {
+            const head = update.state.selection.main.head
+            const line = update.state.doc.lineAt(head)
+            propsRef.current.onCursor?.(line.number, head - line.from + 1)
+          }
+        }),
+      ],
+      parent: hostRef.current!,
+    })
+    viewRef.current = view
+    // 文档生命周期：didOpen（挂载时）+ didClose（卸载时）。切 tab 时组件以
+    // key=tab.id 重建，旧实例卸载 → didClose，新实例挂载 → didOpen。
+    propsRef.current.lsp?.openDocument(propsRef.current.tab.path, propsRef.current.tab.content)
+    // 鼠标离开编辑器（含 gutter）时清理 blame 悬停浮层（marker 移出视口
+    // 不触发 mouseleave，用编辑器 DOM 的 mouseleave 兜底）。
+    const onDomMouseLeave = (): void => hideBlameTooltip()
+    view.dom.addEventListener('mouseleave', onDomMouseLeave)
+    return () => {
+      viewRef.current = null
+      view.dom.removeEventListener('mouseleave', onDomMouseLeave)
+      hideBlameTooltip()
+      propsRef.current.lsp?.closeDocument(propsRef.current.tab.path)
+      view.destroy()
+    }
+    // 组件以 key=tab.id 重建，effect 仅在挂载时执行一次
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // LSP 会话在 EditorPane 渲染后才建立（root effect），挂载时 lsp 可能还是
+  // null；这里单独监听：lsp 就绪（或 root 变化重建）时把当前文档登记给服务器。
+  // openDocument 幂等：docs 已有记录时仅更新文本缓存，不重复 didOpen。
+  useEffect(() => {
+    if (lsp === null) return
+    lsp.openDocument(tab.path, tab.content)
+  }, [lsp, tab.path, tab.content])
+
+  // 收到新诊断 → 强制 lint 重跑（linter source 读最新 props）。
+  useEffect(() => {
+    const view = viewRef.current
+    if (view !== null && lsp !== null) forceLinting(view)
+  }, [diagnostics, lsp])
+
+  // blame 数据 / 开关变化 → reconfigure gutter：仅当「开关打开 且 数据非空」
+  // 才挂载 gutter 列（否则挂空，整列不渲染不占空间）；Compartment 只重算该
+  // gutter 扩展（不动其他配置），lineMarker 每次重建读 propsRef 的最新 blame。
+  useEffect(() => {
+    const view = viewRef.current
+    const compartment = blameCompartmentRef.current
+    if (view === null || compartment === null) return
+    const list = propsRef.current.blame
+    const show = propsRef.current.blameEnabled && list !== null && list.length > 0
+    view.dispatch({ effects: compartment.reconfigure(show ? blameGutter : []) })
+  }, [blame, blameEnabled])
+
+  // 跳转定义后定位：本文件已打开时，revealLine 变化 → 光标跳到目标行并滚动到视口。
+  useEffect(() => {
+    if (revealLine === null) return
+    const view = viewRef.current
+    if (view === null) return
+    const lineNumber = Math.max(0, revealLine)
+    const line = view.state.doc.line(Math.min(lineNumber + 1, view.state.doc.lines))
+    view.dispatch({
+      selection: { anchor: line.from },
+      effects: EditorView.scrollIntoView(line.from, { y: 'center' }),
+    })
+    view.focus()
+    onRevealDone()
+  }, [revealLine, onRevealDone])
+
+  // 关闭浮层（右键菜单 / 快速修复子菜单 / 重命名框：外部点击或 Esc）
+  useEffect(() => {
+    if (menu === null && actions === null && renameBox === null) return
+    const onDown = (event: MouseEvent): void => {
+      const target = event.target as HTMLElement | null
+      if (target !== null && target.closest('[data-ide-editor-menu], [data-ide-rename-box]') !== null) return
+      setMenu(null)
+      setActions(null)
+      setRenameBox(null)
+    }
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key !== 'Escape') return
+      setMenu(null)
+      setActions(null)
+      setRenameBox(null)
+    }
+    window.addEventListener('mousedown', onDown)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('mousedown', onDown)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [menu, actions, renameBox])
+
+  return (
+    <>
+      {tab.truncated === true && (
+        <div style={{
+          flexShrink: 0, padding: '4px 10px', fontSize: 12, color: '#b45309',
+          background: 'rgba(245,158,11,0.12)', borderBottom: '1px solid rgba(245,158,11,0.3)',
+        }}>
+          ⚠ 文件过大已截断显示（只读，禁止保存，防止覆盖尾部内容）
+        </div>
+      )}
+      <div
+        ref={hostRef}
+        style={{ flex: 1, minHeight: 0, overflow: 'hidden', ['--ide-editor-font-size' as string]: `${fontSize}px` }}
+        onContextMenu={(event) => {
+          const view = viewRef.current
+          if (view === null) return
+          event.preventDefault()
+          const selection = view.state.selection.main
+          const text = view.state.sliceDoc(selection.from, selection.to)
+          setMenu({ text, x: event.clientX, y: event.clientY })
+        }}
+      />
+      {menu !== null && createPortal(
+        <div
+          data-ide-editor-menu=""
+          style={{
+            position: 'fixed', left: Math.max(4, Math.min(menu.x, window.innerWidth - 220)),
+            top: Math.max(4, Math.min(menu.y, window.innerHeight - 120)),
+            zIndex: 2147483000, minWidth: 200, padding: '4px 0',
+            // 皮肤把 --dsw-alias-bg-base 全局透明化，浮层用 overlay（近不透明层变量）
+            // + label-primary（文字色）自足背景，避免透明菜单透出底下内容看不清。
+            background: 'var(--dsw-alias-bg-overlay, rgba(248,250,255,0.96))',
+            color: 'var(--dsw-alias-label-primary, #1a1a1a)',
+            border: '1px solid var(--ide-border,#e5e6eb)', borderRadius: 6,
+            boxShadow: '0 8px 24px rgba(0,0,0,0.28)', fontSize: 13, fontFamily: 'inherit',
+          }}
+          onContextMenu={(event) => event.preventDefault()}
+        >
+          <MenuItemButton
+            onClick={() => {
+              const view = viewRef.current
+              const m = menu
+              setMenu(null)
+              if (view === null || m === null) return
+              const cursor = view.state.selection.main.head
+              void codeActionsFor(view, propsRef.current, cursor).then((items) => {
+                if (items.length > 0) setActions({ items, x: m.x, y: m.y })
+              })
+            }}
+          >
+            💡 快速修复
+          </MenuItemButton>
+          <MenuItemButton
+            onClick={() => {
+              const view = viewRef.current
+              const m = menu
+              setMenu(null)
+              if (view === null || m === null) return
+              const cursor = view.state.selection.main.head
+              const word = wordAt(view, cursor)
+              setRenameBox({ x: m.x, y: m.y, initial: word ?? '' })
+            }}
+          >
+            ✏️ 重命名符号 (F2)
+          </MenuItemButton>
+          <MenuItemButton
+            onClick={() => {
+              const view = viewRef.current
+              setMenu(null)
+              if (view === null) return
+              void formatDocument(view, propsRef.current)
+            }}
+          >
+            🎨 格式化文档 (Shift+Alt+F)
+          </MenuItemButton>
+          <div style={{ height: 1, margin: '4px 8px', background: 'var(--ide-border,#e5e6eb)' }} />
+          {menu.text.trim() !== '' && (
+            <MenuItemButton
+              onClick={() => { const m = menu; setMenu(null); if (m !== null) onContextAction('ask-agent', m.text) }}
+            >
+              🤖 发送给 agent 分析/修改
+            </MenuItemButton>
+          )}
+          {menu.text.trim() !== '' && (
+            <MenuItemButton
+              onClick={() => { const m = menu; setMenu(null); if (m !== null) onContextAction('copy', m.text) }}
+            >
+              📋 复制选中
+            </MenuItemButton>
+          )}
+        </div>,
+        document.body,
+      )}
+      {/* 快速修复子菜单（codeAction 列表） */}
+      {actions !== null && createPortal(
+        <div
+          data-ide-editor-menu=""
+          style={{
+            position: 'fixed', left: Math.max(4, Math.min(actions.x, window.innerWidth - 260)),
+            top: Math.max(4, Math.min(actions.y, window.innerHeight - 160)),
+            zIndex: 2147483000, minWidth: 240, padding: '4px 0',
+            background: 'var(--dsw-alias-bg-overlay, rgba(248,250,255,0.98))',
+            color: 'var(--dsw-alias-label-primary, #1a1a1a)',
+            border: '1px solid var(--ide-border,#e5e6eb)', borderRadius: 6,
+            boxShadow: '0 8px 24px rgba(0,0,0,0.28)', fontSize: 13, fontFamily: 'inherit',
+          }}
+          onContextMenu={(event) => event.preventDefault()}
+        >
+          <div style={{ padding: '4px 14px', fontSize: 11, color: '#9ca3af' }}>快速修复</div>
+          {actions.items.map((item) => (
+            <MenuItemButton
+              key={item.title}
+              onClick={() => { setActions(null); item.apply() }}
+            >
+              {item.title}
+            </MenuItemButton>
+          ))}
+        </div>,
+        document.body,
+      )}
+      {/* 重命名输入框 */}
+      {renameBox !== null && createPortal(
+        <div
+          data-ide-rename-box=""
+          style={{
+            position: 'fixed', left: Math.max(4, Math.min(renameBox.x, window.innerWidth - 260)),
+            top: Math.max(4, Math.min(renameBox.y, window.innerHeight - 80)),
+            zIndex: 2147483000, width: 240, padding: '6px 10px',
+            background: 'var(--dsw-alias-bg-overlay, rgba(248,250,255,0.98))',
+            color: 'var(--dsw-alias-label-primary, #1a1a1a)',
+            border: '1px solid var(--ide-accent,#4f8cff)', borderRadius: 6,
+            boxShadow: '0 8px 24px rgba(0,0,0,0.28)', fontSize: 13, fontFamily: 'inherit',
+          }}
+          onContextMenu={(event) => event.preventDefault()}
+        >
+          <div style={{ fontSize: 11, color: '#9ca3af', marginBottom: 4 }}>重命名符号</div>
+          <input
+            autoFocus
+            defaultValue={renameBox.initial}
+            style={{
+              width: '100%', boxSizing: 'border-box', padding: '4px 6px',
+              fontSize: 13, fontFamily: 'inherit', outline: 'none',
+              background: 'var(--dsw-alias-bg-base,#ffffff)', color: 'inherit',
+              border: '1px solid var(--ide-border,#e5e6eb)', borderRadius: 4,
+            }}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') { setRenameBox(null); return }
+              if (event.key !== 'Enter') return
+              const value = (event.currentTarget as HTMLInputElement).value.trim()
+              const box = renameBox
+              setRenameBox(null)
+              const view = viewRef.current
+              if (box === null || view === null || value === '') return
+              void doRename(view, propsRef.current, value)
+            }}
+          />
+        </div>,
+        document.body,
+      )}
+    </>
+  )
+}
+
+function tabTitle(path: string): string {
+  return path.split('/').pop() ?? path
+}
+
+/** 运行面板状态：进行中 或 完成（含输出与退出码）。 */
+type RunOutput =
+  | { state: 'running' }
+  | { state: 'done'; result: RunResult; error?: string }
+
+const EMPTY_RUN: RunResult = {
+  exitCode: null,
+  signal: null,
+  timedOut: false,
+  stdout: '',
+  stderr: '',
+  stdoutTruncated: false,
+  stderrTruncated: false,
+  durationMs: 0,
+}
+
+/** 复制到剪贴板（含旧引擎 fallback），供「复制选中」使用。 */
+async function writeClipboard(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text)
+    return true
+  } catch {
+    try {
+      const area = document.createElement('textarea')
+      area.value = text
+      area.style.position = 'fixed'
+      area.style.opacity = '0'
+      document.body.appendChild(area)
+      area.select()
+      const ok = document.execCommand('copy')
+      area.remove()
+      return ok
+    } catch {
+      return false
+    }
+  }
+}
+
+/**
+ * 面板拖拽手柄的 pointerdown 处理（终端 / 输出面板共用）：
+ * - **拖拽中直接操作 DOM 高度（target.style.height），不触发 React 重渲染**——
+ *   这是消除「底部抖动」的关键：之前每帧 setState 让 React 重渲染整个 EditorPane
+ *   （CodeMirror/终端/状态栏全树 layout），浏览器布局每帧重排 → 面板边框抖动。
+ * - setPointerCapture 锁定指针事件（拖出面板/窗口不丢事件）；向上拖 = 高度变大。
+ * - 松手：onCommit(最终 px) 同步回 React 状态（供持久化），onDragEnd 回调一次
+ *   （终端用它触发「立即 fit」）。
+ */
+function beginDragResize(
+  event: React.PointerEvent<HTMLElement>,
+  min: number,
+  max: number,
+  onCommit: (px: number) => void,
+  onDragEnd?: () => void,
+): void {
+  event.preventDefault()
+  const el = event.currentTarget
+  // 手柄的父元素 = 面板容器（终端 / 输出），拖拽时直接改它的高度
+  const target = el.parentElement
+  if (target === null) return
+  let captured = false
+  try {
+    el.setPointerCapture(event.pointerId)
+    captured = true
+  } catch {
+    // 某些环境（如触摸）捕获可能失败；退化为 window 监听。
+  }
+  const startY = event.clientY
+  const startHeight = target.getBoundingClientRect().height
+  const onMove = (moveEvent: PointerEvent): void => {
+    const next = Math.max(min, Math.min(startHeight + (startY - moveEvent.clientY), max))
+    // 原生 DOM 直改：无 React 重渲染、无整树布局抖动
+    target.style.height = `${next}px`
+  }
+  const onEnd = (): void => {
+    el.removeEventListener('pointermove', onMove)
+    el.removeEventListener('pointerup', onEnd)
+    el.removeEventListener('pointercancel', onEnd)
+    window.removeEventListener('pointerup', onEnd)
+    window.removeEventListener('pointercancel', onEnd)
+    try {
+      el.releasePointerCapture(event.pointerId)
+    } catch {
+      // capture 可能已自动释放
+    }
+    // 同步最终高度到 React 状态（此时 DOM 已是最终值，状态对齐后无跳变）
+    onCommit(target.getBoundingClientRect().height)
+    onDragEnd?.()
+  }
+  el.addEventListener('pointermove', onMove)
+  el.addEventListener('pointerup', onEnd)
+  el.addEventListener('pointercancel', onEnd)
+  if (!captured) {
+    // capture 失败时兜底：指针拖出元素后，window 层仍能收到松手事件
+    window.addEventListener('pointerup', onEnd)
+    window.addEventListener('pointercancel', onEnd)
+  }
+}
+
+/** 面板顶部拖拽手柄的通用渲染（内联样式）。 */
+function resizeHandleStyle(): React.CSSProperties {
+  return {
+    position: 'absolute',
+    top: -4,
+    left: 0,
+    right: 0,
+    height: 8,
+    cursor: 'ns-resize',
+    zIndex: 10,
+    background: 'transparent',
+  }
+}
+
+export function EditorPane({
+  root, tabs, activeTabId, onActivate, onClose, onContentChange, onDirtySave, onCloseEditor, onAskAgent, onOpenFile, onDiagnostics, onReloadTab, lspCapabilities,
+}: EditorPaneProps): JSX.Element {
+  const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? null
+  const [status, setStatus] = useState('')
+  const [output, setOutput] = useState<RunOutput | null>(null)
+  const [termVisible, setTermVisible] = useState(false)
+  // 终端面板高度（px），顶部手柄可拖拽调整
+  const [termHeight, setTermHeight] = useState(240)
+  // 运行输出面板高度（px），同样可拖拽
+  const [outputHeight, setOutputHeight] = useState(200)
+  // 终端「立即 fit」触发器：手柄松手时 +1，TerminalPane 跳过防抖立即 fit+resize
+  const [termFitTick, setTermFitTick] = useState(0)
+  // LSP（阶段 2 统一链路）：会话由 dsh-lsp-core lspCapabilities 按 (root, 会话组)
+  // 管理——lspFor 打开文件时 acquire，这里的 state 只承载诊断缓存与状态展示。
+  // Java LSP 是可选能力，本机无 JDTLS 时纯高亮降级。
+  const [diagMap, setDiagMap] = useState<Map<string, LspDiagnostic[]>>(new Map())
+  // LSP 状态按会话组分槽（typescript / python / powershell / java，各自独立），
+  // 避免一个服务器失败时盖住其他语言。
+  const [lspStatus, setLspStatus] = useState<Record<string, string>>({})
+  // 服务器完整错误日志（window/logMessage type 3），状态栏 hover 可见全文。
+  const [lspFullError, setLspFullError] = useState<Record<string, string>>({})
+  // 状态栏：光标行列
+  const [cursorPos, setCursorPos] = useState<{ line: number; column: number } | null>(null)
+  // 编码选择菜单（状态栏点击编码弹出；up=true 时贴按钮上沿向上生长，
+  // 按钮上方空间不足时才向下弹，避免被下方编辑区/面板遮挡）。
+  const [encMenu, setEncMenu] = useState<{ x: number; up: boolean; rectTop: number } | null>(null)
+  // 编辑器字号（px）：Ctrl/Cmd+滚轮调整，localStorage 记忆（VS Code 习惯）。
+  const [editorFontSize, setEditorFontSize] = useState(() => {
+    const saved = Number.parseInt(localStorage.getItem('dsh-ide-editor-font-size') ?? '', 10)
+    return Number.isFinite(saved) && saved >= 9 && saved <= 24 ? saved : 13
+  })
+  const changeFontSize = (size: number): void => {
+    setEditorFontSize(size)
+    localStorage.setItem('dsh-ide-editor-font-size', String(size))
+  }
+  // GitLens 式行内 blame：按 1-based 行号升序；null = 无 blame（非仓库/未跟踪/超大文件）。
+  const [blame, setBlame] = useState<BlameLine[] | null>(null)
+  // 保存成功后 +1，触发重新拉取 blame（保存 = 提交前的内容变化）。
+  const [blameTick, setBlameTick] = useState(0)
+  // 整文件 gutter blame 开关（默认关：每行标注占空间；需要时工具栏「Blame」点开）。
+  // 状态栏光标行 blame 始终显示（一行信息，不占空间）。localStorage 记忆。
+  const [blameEnabled, setBlameEnabled] = useState(() => localStorage.getItem('dsh-ide-blame-enabled') === '1')
+  const toggleBlame = (): void => {
+    setBlameEnabled((enabled) => {
+      const next = !enabled
+      localStorage.setItem('dsh-ide-blame-enabled', next ? '1' : '0')
+      return next
+    })
+  }
+
+  // 拉取当前文件 blame：root / 文件 / 保存后 变化时重取。编辑中（dirty）不清
+  // 除则行号会与 blame 错位，由 onContentChange 处理（见 handleContentChange）。
+  useEffect(() => {
+    if (root === '' || activeTab === null || activeTab.truncated === true || activeTab.kind === 'image') {
+      setBlame(null)
+      return
+    }
+    if (activeTab.content.split('\n').length > BLAME_MAX_LINES) {
+      setBlame(null)
+      return
+    }
+    let cancelled = false
+    void apiGitBlame(root, activeTab.path).then((result) => {
+      if (cancelled) return
+      setBlame(result.ok ? result.value.lines : null)
+    })
+    return () => { cancelled = true }
+    // activeTab 是可变对象（content 随编辑更新），只依赖 path 避免每次按键重取
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [root, activeTab?.path, blameTick])
+
+  // 当前文件的 LSP 会话：语言路由完全交给 lspCapabilities（注册表驱动，
+  // languageFor 查语言摘要 → acquire 按会话组复用；未注册语言/未装插件返回
+  // null = 纯高亮）。wsUrl 缺省即宿主 lsp-core 桥 /dsh-lsp/ws。
+  const lspFor = (path: string): LanguageCapability | null => {
+    if (lspCapabilities === undefined || root === '') return null
+    const language = lspCapabilities.languageFor(path)
+    if (language === null) return null
+    return lspCapabilities.acquire(root, language.id)
+  }
+
+  // 每 root LSP 会话（阶段 2 统一链路）：按会话组 acquire 各语言会话并订阅
+  // 诊断/状态/服务器日志；未注册语言（语言插件未装）acquire 返回 null 跳过。
+  // root 变化时 disposeRoot 整体重建。ts 系四个 languageId 共享 'typescript'
+  // 会话（注册表 sessionId 归一，一条 tsserver 服务 ts/tsx/js/jsx）。
+  useEffect(() => {
+    if (root === '' || lspCapabilities === undefined) {
+      setDiagMap(new Map())
+      return
+    }
+    const SESSION_LANGUAGES: ReadonlyArray<{ language: string; key: string }> = [
+      { language: 'typescript', key: 'typescript' },
+      { language: 'python', key: 'python' },
+      { language: 'powershell', key: 'powershell' },
+      { language: 'java', key: 'java' },
+    ]
+    const disposers: Array<() => void> = []
+    setDiagMap(new Map())
+    for (const { language, key } of SESSION_LANGUAGES) {
+      const cap = lspCapabilities.acquire(root, language)
+      if (cap === null) continue
+      setLspStatus((prev) => ({ ...prev, [key]: '连接中…' }))
+      disposers.push(cap.onDiagnostics((uri, diagnostics) => {
+        // 本地缓存（编辑器波浪线）+ 上抛（问题面板聚合）。
+        setDiagMap((prev) => {
+          const next = new Map(prev)
+          next.set(uri, diagnostics)
+          return next
+        })
+        onDiagnostics(uri, diagnostics)
+      }))
+      disposers.push(cap.onStatus((status) => {
+        setLspStatus((prev) => ({
+          ...prev,
+          [key]: status === 'ready' ? '已连接' : status === 'error' ? 'LSP 不可用' : '连接中…',
+        }))
+      }))
+      disposers.push(cap.onServerLog((type, message) => {
+        // type 3 = Error：服务器失败时的完整 stderr，存起来供状态栏 hover 展示全文。
+        if (type === 3) setLspFullError((prev) => ({ ...prev, [key]: message }))
+      }))
+    }
+    return () => {
+      for (const dispose of disposers) dispose()
+      lspCapabilities.disposeRoot(root)
+    }
+  }, [root, lspCapabilities])
+
+  /** 跳转定义：LSP 返回的 uri（file:///...）→ 相对 root 路径 + 行号。
+   *  目标文件已打开则直接定位；未打开则走 mount 层的 openFile。 */
+  const [revealTarget, setRevealTarget] = useState<{ path: string; line: number } | null>(null)
+  const onOpenLocation = (uri: string, line: number): void => {
+    if (root === '') return
+    const decoded = normalizeUri(uri).replace(/^file:\/\//, '')
+    // 归一化后路径可能是 /c:/... 或 c:/...，去掉前导斜杠。
+    const candidate = decoded.replace(/^\//, '').replaceAll('/', '\\')
+    const normRoot = normalizeUri(pathToUri(root, '')).replace(/^file:\/\//, '').replace(/^\//, '').replaceAll('/', '\\').replace(/\\$/, '')
+    const normCandidate = candidate.replace(/^[a-zA-Z]:/, (drive) => drive.toUpperCase())
+    const normRootUpper = normRoot.replace(/^[a-zA-Z]:/, (drive) => drive.toUpperCase())
+    if (normCandidate.toLowerCase().startsWith(normRootUpper.toLowerCase())) {
+      const relative = normCandidate.slice(normRootUpper.length).replace(/^\\/, '')
+      if (relative !== '') {
+        setRevealTarget({ path: relative, line })
+        onOpenFile(relative, line)
+      }
+    }
+  }
+
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  useEffect(() => () => { if (saveTimer.current !== undefined) clearTimeout(saveTimer.current) }, [])
+
+  /** 保存并返回是否成功（供「运行前保存」与 Ctrl+S 共用）。 */
+  const saveNow = async (tab: EditorTab): Promise<boolean> => {
+    // 图片 tab 为只读预览，禁止保存。
+    if (tab.kind === 'image') {
+      setStatus(`⚠ ${tab.path} 是图片预览，不可保存`)
+      if (saveTimer.current !== undefined) clearTimeout(saveTimer.current)
+      saveTimer.current = setTimeout(() => setStatus(''), 2500)
+      return false
+    }
+    // P1-04：截断文件只读，禁止保存（防尾部数据被覆盖丢失）。
+    if (tab.truncated === true) {
+      setStatus(`⚠ ${tab.path} 过大已被截断，只读不可保存`)
+      if (saveTimer.current !== undefined) clearTimeout(saveTimer.current)
+      saveTimer.current = setTimeout(() => setStatus(''), 4000)
+      return false
+    }
+    // 按 tab 的编码写回（默认 UTF-8；GBK 等文件保持原编码）。
+    const result = await apiWrite(root, tab.path, tab.content, tab.savedMtime, tab.encoding ?? 'utf-8')
+    if (result.ok) {
+      onDirtySave({ ...tab, savedMtime: result.value.mtime })
+      setStatus(`已保存 ${tab.path}`)
+      // 保存成功 → 重新拉取 blame（工作树变化后行归属可能改变）。
+      setBlameTick((tick) => tick + 1)
+    } else {
+      setStatus(`保存失败: ${result.error.message}`)
+    }
+    if (saveTimer.current !== undefined) clearTimeout(saveTimer.current)
+    saveTimer.current = setTimeout(() => setStatus(''), 2500)
+    return result.ok
+  }
+
+  const save = (tab: EditorTab): void => {
+    void saveNow(tab)
+  }
+
+  /** 运行当前文件：先保存（若 dirty），再交给 host 执行并展示输出面板。
+   *  P1-02：首次运行时确认（localStorage 记忆），运行是本机高权限执行入口。 */
+  const runActive = async (): Promise<void> => {
+    if (activeTab === null || output?.state === 'running') return
+    if (activeTab.kind === 'image') {
+      setStatus('图片为只读预览，不可运行')
+      if (saveTimer.current !== undefined) clearTimeout(saveTimer.current)
+      saveTimer.current = setTimeout(() => setStatus(''), 2500)
+      return
+    }
+    if (localStorage.getItem('dsh-ide-run-confirmed') !== '1') {
+      if (!window.confirm('运行将在本机执行程序（node/ts/python/pwsh/java）。确认允许运行？')) return
+      localStorage.setItem('dsh-ide-run-confirmed', '1')
+    }
+    if (activeTab.dirty && !(await saveNow(activeTab))) {
+      setOutput({ state: 'done', error: '保存失败，已取消运行', result: EMPTY_RUN })
+      return
+    }
+    setOutput({ state: 'running' })
+    const result = await apiRun(root, activeTab.path)
+    setOutput(result.ok
+      ? { state: 'done', result: result.value }
+      : { state: 'done', error: result.error.message, result: EMPTY_RUN })
+  }
+
+  const requestSave = (tab: EditorTab): void => {
+    if (saveTimer.current !== undefined) clearTimeout(saveTimer.current)
+    save(tab)
+  }
+
+  /**
+   * 切换文件编码：以新编码重新读取文件并整体替换 tab（未保存修改先确认丢弃）。
+   * id 为 'auto' 时让 host 自动检测实际编码（乱码场景），检测结果存回 tab.encoding。
+   * CodeMirrorPane 以 key 包含 encoding，切换后自动重建并以新内容重新打开。
+   */
+  const switchEncoding = async (id: string): Promise<void> => {
+    const tab = activeTab
+    if (tab === null || tab.kind === 'image') return
+    if (tab.dirty && !window.confirm('切换编码将以新编码重新加载文件，当前未保存的修改将丢失。确定继续？')) {
+      return
+    }
+    const result = await apiRead(root, tab.path, id)
+    if (!result.ok) {
+      setStatus(`切换编码失败: ${result.error.message}`)
+      if (saveTimer.current !== undefined) clearTimeout(saveTimer.current)
+      saveTimer.current = setTimeout(() => setStatus(''), 3500)
+      return
+    }
+    onReloadTab({
+      ...tab,
+      content: result.value.content,
+      encoding: result.value.encoding,
+      savedMtime: result.value.mtime,
+      dirty: false,
+      truncated: result.value.truncated,
+    })
+    setStatus(`已用 ${encodingLabel(result.value.encoding)} 重新加载 ${tab.title}`)
+    if (saveTimer.current !== undefined) clearTimeout(saveTimer.current)
+    saveTimer.current = setTimeout(() => setStatus(''), 2500)
+  }
+
+  // 编码菜单：外部点击（菜单内除外）或 Esc 关闭。
+  useEffect(() => {
+    if (encMenu === null) return
+    const onDown = (event: MouseEvent): void => {
+      const target = event.target as HTMLElement | null
+      if (target !== null && target.closest('[data-ide-editor-menu]') !== null) return
+      setEncMenu(null)
+    }
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') setEncMenu(null)
+    }
+    window.addEventListener('mousedown', onDown)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('mousedown', onDown)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [encMenu])
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+      {/* Tab strip */}
+      <div style={{
+        display: 'flex', alignItems: 'stretch', borderBottom: '1px solid var(--ide-border, #e5e6eb)',
+        background: 'var(--ide-tabbar, rgba(127,127,127,0.06))', flexShrink: 0, overflowX: 'auto',
+      }}>
+        {tabs.length === 0 && (
+          <div style={{ padding: '6px 12px', fontSize: 12, color: '#9ca3af' }}>
+            从左侧文件树点击文件打开编辑器
+          </div>
+        )}
+        {tabs.map((tab) => (
+          <div
+            key={tab.id}
+            onClick={() => onActivate(tab.id)}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px',
+              fontSize: 13, cursor: 'pointer', whiteSpace: 'nowrap',
+              borderRight: '1px solid var(--ide-border, #e5e6eb)',
+              background: tab.id === activeTabId ? 'var(--ide-tab-active, #ffffff)' : 'transparent',
+              color: tab.id === activeTabId ? 'inherit' : '#6b7280',
+            }}
+            title={tab.path}
+          >
+            <span>{tab.dirty ? '● ' : ''}{tabTitle(tab.path)}</span>
+            <span
+              onClick={(event) => { event.stopPropagation(); onClose(tab.id) }}
+              style={{ color: '#9ca3af', fontSize: 12, padding: '0 2px' }}
+            >
+              ✕
+            </span>
+          </div>
+        ))}
+        {/* 右侧按钮组：保存 | 终端 | 运行 | 关闭编辑区 */}
+        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8, paddingRight: 8, flexShrink: 0 }}>
+          <button
+            onClick={() => { if (activeTab !== null) requestSave(activeTab) }}
+            disabled={activeTab === null || !activeTab.dirty || activeTab.kind === 'image'}
+            title={activeTab === null ? '先打开一个文件' : activeTab.kind === 'image' ? '图片为只读预览，不可保存' : activeTab.dirty ? `保存 ${activeTab.path}（Ctrl+S）` : '没有未保存的更改'}
+            style={{
+              padding: '4px 10px', fontSize: 12,
+              cursor: activeTab !== null && activeTab.dirty && activeTab.kind !== 'image' ? 'pointer' : 'default',
+              color: activeTab !== null && activeTab.dirty && activeTab.kind !== 'image' ? '#16a34a' : '#9ca3af',
+              background: 'transparent', border: '1px solid var(--ide-border,#e5e6eb)',
+              borderRadius: 4, whiteSpace: 'nowrap',
+            }}
+          >
+            💾 保存
+          </button>
+          <button
+            onClick={() => setTermVisible((visible) => !visible)}
+            title="终端（显示/隐藏底部终端面板）"
+            style={{
+              padding: '4px 10px', fontSize: 12, cursor: 'pointer',
+              color: termVisible ? 'var(--ide-hl-keyword, #0000FF)' : '#9ca3af',
+              background: 'transparent', border: '1px solid var(--ide-border,#e5e6eb)',
+              borderRadius: 4, whiteSpace: 'nowrap',
+            }}
+          >
+            {termVisible ? '▣ 终端' : '▢ 终端'}
+          </button>
+          <button
+            onClick={() => { void runActive() }}
+            disabled={activeTab === null || output?.state === 'running' || activeTab.kind === 'image'}
+            title={activeTab === null ? '先打开一个文件' : activeTab.kind === 'image' ? '图片为只读预览，不可运行' : `运行 ${activeTab.path}`}
+            style={{
+              padding: '4px 10px', fontSize: 12,
+              cursor: activeTab === null || activeTab.kind === 'image' ? 'default' : 'pointer',
+              color: activeTab === null || activeTab.kind === 'image' ? '#9ca3af' : 'var(--ide-hl-keyword, #0000FF)',
+              background: 'transparent', border: '1px solid var(--ide-border,#e5e6eb)',
+              borderRadius: 4, whiteSpace: 'nowrap',
+            }}
+          >
+            {output?.state === 'running' ? '⏳ 运行中…' : '▶ 运行'}
+          </button>
+          <button
+            onClick={toggleBlame}
+            title={blameEnabled
+              ? '关闭行内 blame（每行的提交标注）'
+              : '开启行内 blame（每行显示 提交hash + 作者，悬停看详情）'}
+            style={{
+              padding: '4px 10px', fontSize: 12, cursor: 'pointer',
+              color: blameEnabled ? 'var(--ide-hl-keyword, #0000FF)' : '#9ca3af',
+              background: 'transparent', border: '1px solid var(--ide-border,#e5e6eb)',
+              borderRadius: 4, whiteSpace: 'nowrap',
+            }}
+          >
+            {blameEnabled ? '◉ Blame' : '○ Blame'}
+          </button>
+          <button
+            onClick={onCloseEditor}
+            title="关闭编辑区"
+            style={{
+              padding: '4px 10px', fontSize: 12, cursor: 'pointer',
+              color: '#9ca3af', background: 'transparent', border: '1px solid var(--ide-border,#e5e6eb)',
+              borderRadius: 4, whiteSpace: 'nowrap',
+            }}
+          >
+            ✕ 关闭编辑区
+          </button>
+        </div>
+      </div>
+
+      {/* Editor body + terminal panel */}
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+        {activeTab === null ? (
+          <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#9ca3af', fontSize: 14 }}>
+            选择左侧文件开始编辑
+          </div>
+        ) : activeTab.kind === 'image' ? (
+          <ImagePreview tab={activeTab} />
+        ) : (
+          <CodeMirrorPane
+            // key 含编码：切换编码时强制重建（新 content 重新打开；普通编辑不变）。
+            key={`${activeTab.id}::${activeTab.encoding ?? 'utf-8'}`}
+            tab={activeTab}
+            onContentChange={(id, content) => {
+              onContentChange(id, content)
+              // 编辑后行号与 blame 错位：清空 gutter 标注（保存后自动重取）。
+              // prev === null 时返回原引用，React bail out 不触发重渲染。
+              setBlame((prev) => (prev === null ? prev : null))
+            }}
+            onSave={(tab) => requestSave(tab)}
+            lsp={lspFor(activeTab.path)}
+            diagnostics={diagMap.get(normalizeUri(pathToUri(root, activeTab.path))) ?? []}
+            onOpenLocation={onOpenLocation}
+            revealLine={revealTarget !== null && revealTarget.path === activeTab.path ? revealTarget.line : null}
+            onRevealDone={() => setRevealTarget(null)}
+            root={root}
+            onCursor={(line, column) => setCursorPos({ line, column })}
+            fontSize={editorFontSize}
+            onFontSizeChange={changeFontSize}
+            blame={blame}
+            blameEnabled={blameEnabled}
+            onContextAction={(kind, text) => {
+              if (kind === 'copy') {
+                void writeClipboard(text)
+              } else {
+                onAskAgent(text, activeTab.path)
+                setStatus('已发送到聊天区，按 Enter 发送')
+                if (saveTimer.current !== undefined) clearTimeout(saveTimer.current)
+                saveTimer.current = setTimeout(() => setStatus(''), 2500)
+              }
+            }}
+          />
+        )}
+        {termVisible && (
+          <div style={{
+            height: termHeight,
+            flexShrink: 0,
+            position: 'relative',
+            borderTop: '1px solid var(--ide-border,#e5e6eb)',
+            background: 'var(--dsw-alias-bg-base,#ffffff)',
+          }}>
+            {/* 拖拽手柄：上拉=终端变高，下拉=变矮（clamp 120px ~ 视口 70%）；
+                拖拽中直改 DOM（无 React 重渲染 → 不抖），松手同步状态并触发立即 fit */}
+            <div
+              onPointerDown={(event) => beginDragResize(event, 120, window.innerHeight * 0.7, (px) => setTermHeight(px), () => setTermFitTick((t) => t + 1))}
+              title="拖拽调整终端高度"
+              style={resizeHandleStyle()}
+              onMouseEnter={(event) => { (event.currentTarget as HTMLElement).style.background = 'rgba(127,127,127,0.35)' }}
+              onMouseLeave={(event) => { (event.currentTarget as HTMLElement).style.background = 'transparent' }}
+            />
+            <TerminalPane root={root} fitTick={termFitTick} />
+          </div>
+        )}
+      </div>
+
+      {/* 运行输出面板（编辑器下方，可拖拽调整高度，可关闭） */}
+      {output !== null && (
+        <div style={{
+          height: outputHeight,
+          display: 'flex',
+          flexDirection: 'column',
+          flexShrink: 0,
+          position: 'relative',
+          borderTop: '1px solid var(--ide-border,#e5e6eb)',
+          background: 'var(--dsw-alias-bg-base,#ffffff)',
+        }}>
+          {/* 拖拽手柄：上拉=输出面板变高（clamp 100px ~ 视口 60%），拖拽中直改 DOM */}
+          <div
+            onPointerDown={(event) => beginDragResize(event, 100, window.innerHeight * 0.6, (px) => setOutputHeight(px))}
+            title="拖拽调整输出面板高度"
+            style={resizeHandleStyle()}
+            onMouseEnter={(event) => { (event.currentTarget as HTMLElement).style.background = 'rgba(127,127,127,0.35)' }}
+            onMouseLeave={(event) => { (event.currentTarget as HTMLElement).style.background = 'transparent' }}
+          />
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 8, padding: '3px 10px',
+            fontSize: 12, color: '#6b7280', borderBottom: '1px dashed var(--ide-border,#e5e6eb)', flexShrink: 0,
+          }}>
+            <span>输出{output.state === 'running' ? ' · 运行中…' : ''}</span>
+            <span style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
+              {output.state === 'done' && output.result.stdoutTruncated && <span style={{ color: '#b45309' }}>stdout 已截断</span>}
+              {output.state === 'done' && output.result.stderrTruncated && <span style={{ color: '#b45309' }}>stderr 已截断</span>}
+              <button
+                onClick={() => setOutput(null)}
+                title="关闭输出"
+                style={{ padding: '1px 8px', fontSize: 12, cursor: 'pointer', color: '#9ca3af', background: 'transparent', border: '1px solid var(--ide-border,#e5e6eb)', borderRadius: 4, fontFamily: 'inherit' }}
+              >
+                ✕
+              </button>
+            </span>
+          </div>
+          <pre style={{
+            flex: 1, overflow: 'auto', margin: 0, padding: 8,
+            fontSize: 12, lineHeight: 1.5,
+            fontFamily: 'ui-monospace, "Cascadia Code", Consolas, monospace',
+            whiteSpace: 'pre-wrap', wordBreak: 'break-all', color: 'inherit',
+          }}>
+            {output.state === 'done' && output.error !== undefined && <span style={{ color: '#dc2626' }}>{output.error}</span>}
+            {output.state === 'done' && output.result.stdout}
+            {output.state === 'done' && output.result.stderr !== '' && <span style={{ color: '#dc2626' }}>{output.result.stderr}</span>}
+            {output.state === 'running' && <span style={{ color: '#9ca3af' }}>执行中，请稍候…</span>}
+            {output.state === 'done' && `\n\n[进程退出码 ${output.result.exitCode ?? '?'}${output.result.timedOut ? '（超时已终止）' : ''} · 耗时 ${output.result.durationMs}ms]`}
+          </pre>
+        </div>
+      )}
+
+      {/* Status bar */}
+      <div style={{
+        display: 'flex', justifyContent: 'space-between', padding: '3px 10px',
+        fontSize: 12, color: '#6b7280', borderTop: '1px solid var(--ide-border, #e5e6eb)', flexShrink: 0,
+        gap: 12, alignItems: 'center',
+      }}>
+        <span style={{ display: 'flex', gap: 12, alignItems: 'center', overflow: 'hidden' }}>
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{root}</span>
+          {activeTab !== null && lspCapabilities !== undefined && lspCapabilities.languageFor(activeTab.path) !== null && (() => {
+            // 按当前文件语言显示对应语言服务器的状态（各会话组分槽，互不污染）。
+            const server = lspCapabilities.languageFor(activeTab.path)?.sessionId ?? ''
+            const status = lspStatus[server] ?? ''
+            return (
+              <span title={lspFullError[server] !== undefined ? lspFullError[server] : '语言服务器状态'}>
+                {status === '已连接' ? '✓ LSP' : status !== '' ? `… ${status}` : '… LSP'}
+              </span>
+            )
+          })()}
+        </span>
+        <span style={{ display: 'flex', gap: 12, alignItems: 'center', flexShrink: 0 }}>
+          {activeTab !== null && (activeTab.kind === 'image' ? (
+            <span title="位图预览（只读，滚轮缩放，双击回到适合窗口）">图片预览</span>
+          ) : (
+            <>
+              <span title="光标位置">{cursorPos !== null ? `行 ${cursorPos.line}, 列 ${cursorPos.column}` : ''}</span>
+              {(() => {
+                // GitLens 式光标行 blame：作者 · 相对时间 · 短 hash（未提交行显示「未提交」）。
+                if (blame === null || cursorPos === null) return null
+                const info = blame.find((item) => item.line === cursorPos.line)
+                if (info === undefined) return null
+                const short = shortHash(info.hash)
+                const label = short !== null ? `${info.author} · ${relativeTime(info.time)} · ${short}` : '未提交'
+                return (
+                  <span
+                    title={isUncommitted(info.hash) ? '工作区未提交改动' : `${info.summary}\n${info.hash}`}
+                    style={{ maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: '#9ca3af' }}
+                  >
+                    ◉ {label}
+                  </span>
+                )
+              })()}
+              <span title={`编辑器字号（Ctrl+滚轮调整）: ${editorFontSize}px`}>{editorFontSize}px</span>
+              <span title="语言">{lspCapabilities?.languageFor(activeTab.path)?.displayName ?? 'plaintext'}</span>
+              <span
+                title="文件编码，点击选择（以新编码重新加载）"
+                onClick={(event) => {
+                  const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
+                  // 菜单高度约 280px：按钮上方空间足够 → 向上生长（贴按钮上沿）；
+                  // 否则向下弹，防止被窗口顶边截断。
+                  setEncMenu({ x: rect.left, up: rect.top > 300, rectTop: rect.top })
+                }}
+                style={{ cursor: 'pointer', borderBottom: '1px dotted var(--ide-muted,#9ca3af)' }}
+              >
+                {encodingLabel(activeTab.encoding ?? 'utf-8')}
+              </span>
+              {(() => {
+                const list = diagMap.get(normalizeUri(pathToUri(root, activeTab.path))) ?? []
+                const errors = list.filter((d) => d.severity === 1).length
+                const warnings = list.filter((d) => d.severity === 2).length
+                if (errors === 0 && warnings === 0) return <span title="无诊断">✓</span>
+                return (
+                  <span title={`${errors} 错误, ${warnings} 警告`}>
+                    {errors > 0 && <span style={{ color: '#dc2626' }}>{errors} 错误</span>}
+                    {warnings > 0 && <span style={{ color: '#d97706' }}>{warnings} 警告</span>}
+                  </span>
+                )
+              })()}
+            </>
+          ))}
+          <span>{status !== '' ? status : (activeTab !== null ? (activeTab.kind === 'image' ? '图片' : activeTab.dirty ? '未保存' : '已保存') : '')}</span>
+        </span>
+      </div>
+      {/* 编码选择菜单（状态栏点击编码弹出，选择后以新编码重新加载当前文件）。
+          默认贴按钮上沿向上生长（bottom 定位）；按钮贴近窗口顶部时向下弹。 */}
+      {encMenu !== null && createPortal(
+        <div
+          data-ide-editor-menu=""
+          style={{
+            position: 'fixed',
+            left: Math.max(4, Math.min(encMenu.x, window.innerWidth - 240)),
+            ...(encMenu.up
+              ? { bottom: window.innerHeight - encMenu.rectTop + 4 }
+              : { top: encMenu.rectTop + 20 }),
+            zIndex: 2147483000, minWidth: 230, maxHeight: 280, overflow: 'auto', padding: '4px 0',
+            background: 'var(--dsw-alias-bg-overlay, rgba(248,250,255,0.98))',
+            color: 'var(--dsw-alias-label-primary, #1a1a1a)',
+            border: '1px solid var(--ide-border,#e5e6eb)', borderRadius: 6,
+            boxShadow: '0 8px 24px rgba(0,0,0,0.28)', fontSize: 13, fontFamily: 'inherit',
+          }}
+          onContextMenu={(event) => event.preventDefault()}
+        >
+          <div style={{ padding: '4px 14px', fontSize: 11, color: '#9ca3af' }}>选择编码（重新加载文件）</div>
+          {TEXT_ENCODING_CHOICES.map((choice) => (
+            <MenuItemButton
+              key={choice.id}
+              onClick={() => { const m = encMenu; setEncMenu(null); if (m !== null) void switchEncoding(choice.id) }}
+            >
+              {choice.id === (activeTab?.encoding ?? 'utf-8') ? '✓ ' : ''}{choice.label}
+            </MenuItemButton>
+          ))}
+        </div>,
+        document.body,
+      )}
+    </div>
+  )
+}
+
+/**
+ * Open a file into the editor store (async load).
+ * P1-06: uses a functional updater so a late-returning read merges into the
+ * latest tab list instead of overwriting newer tabs (fast-open A, B → A's
+ * stale snapshot must not drop B). P1-04: a truncated file is opened
+ * read-only so the tail cannot be clobbered by a save.
+ */
+export async function openFileInTabs(
+  root: string,
+  path: string,
+  onUpdate: (updater: (prev: { tabs: EditorTab[]; activeTabId: string | null }) => { tabs: EditorTab[]; activeTabId: string | null }) => void,
+): Promise<void> {
+  // 位图图片：按二进制读取（base64 data URL），编辑器内做只读预览，不走文本解码。
+  if (isImagePath(path)) {
+    const binary = await apiReadBinary(root, path)
+    if (!binary.ok) return
+    const tab: EditorTab = {
+      id: `file:${path}`,
+      path,
+      title: tabTitle(path),
+      content: `data:${binary.value.mime};base64,${binary.value.data}`,
+      dirty: false,
+      savedMtime: binary.value.mtime,
+      truncated: false,
+      kind: 'image',
+    }
+    onUpdate((prev) => {
+      const existing = prev.tabs.find((item) => item.path === path)
+      if (existing !== undefined) return { tabs: prev.tabs, activeTabId: existing.id }
+      return { tabs: [...prev.tabs, tab], activeTabId: tab.id }
+    })
+    return
+  }
+  const result = await apiRead(root, path)
+  if (!result.ok) return
+  const truncated = result.value.truncated === true
+  const tab: EditorTab = {
+    id: `file:${path}`,
+    path,
+    title: tabTitle(path),
+    content: result.value.content,
+    dirty: false,
+    savedMtime: result.value.mtime,
+    truncated,
+    kind: 'text',
+    encoding: result.value.encoding ?? 'utf-8',
+  }
+  onUpdate((prev) => {
+    // 已存在（并发打开同一文件）→ 只激活不覆盖。
+    const existing = prev.tabs.find((item) => item.path === path)
+    if (existing !== undefined) return { tabs: prev.tabs, activeTabId: existing.id }
+    return { tabs: [...prev.tabs, tab], activeTabId: tab.id }
+  })
+}
