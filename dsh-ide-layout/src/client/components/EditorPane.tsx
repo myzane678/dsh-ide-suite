@@ -34,6 +34,7 @@ import { toml } from '@codemirror/legacy-modes/mode/toml'
 import { powerShell } from '@codemirror/legacy-modes/mode/powershell'
 import { shell } from '@codemirror/legacy-modes/mode/shell'
 import { batchLanguage } from '../batch-mode.ts'
+import { languageNameFor } from '../language-names.ts'
 import { apiGitBlame, apiRead, apiReadBinary, apiRun, apiWrite } from '../api.ts'
 import type { BlameLine, RunResult } from '../api.ts'
 import type { EditorTab } from '../store.ts'
@@ -1902,7 +1903,7 @@ export function EditorPane({
                 )
               })()}
               <span title={`编辑器字号（Ctrl+滚轮调整）: ${editorFontSize}px`}>{editorFontSize}px</span>
-              <span title="语言">{lspCapabilities?.languageFor(activeTab.path)?.displayName ?? 'plaintext'}</span>
+              <span title="语言">{lspCapabilities?.languageFor(activeTab.path)?.displayName ?? languageNameFor(activeTab.path) ?? 'plaintext'}</span>
               <span
                 title="文件编码，点击选择（以新编码重新加载）"
                 onClick={(event) => {

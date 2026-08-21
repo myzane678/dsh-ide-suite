@@ -2,6 +2,12 @@
 
 本项目版本与更新记录。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [1.0.1] - 2026-08-22
+
+### 修复
+
+- **非 LSP 语言状态栏语言名显示 plaintext**（1.0.0 LSP 拆分引入的退化）：json/md/yaml 等恢复真实展示名。新增轻量语法注册表 `src/client/language-names.ts`（扩展名 → 展示名，与内置语法表同步维护）；状态栏三级 fallback：`lspCapabilities.languageFor` → `languageNameFor` → `plaintext`——LSP 语言仍优先走注册表 displayName，语言路由约定不变。新增 `tests/language-names.test.ts`（本包测试 69 → 73 项）。
+
 ## [1.0.0] - 2026-08-22
 
 LSP 拆分工程完成——本包自 v0.3.1 起 LSP 能力全部移交 dsh-lsp-core 管线，编辑器外壳语言无关化。仓库已并入 monorepo `dsh-ide-suite`（历史保留）。
