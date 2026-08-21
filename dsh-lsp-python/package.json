@@ -1,6 +1,6 @@
 {
   "name": "dsh-lsp-python",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "DSH Python 语言插件：注册 Python 语言（语法高亮 + pyright LSP 服务器）到 dsh-lsp-core 注册表。",
   "type": "module",
   "main": "lib/index.js",

@@ -2,6 +2,27 @@
 
 本项目版本与更新记录。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [1.0.0] - 2026-08-22
+
+LSP 拆分工程完成——本包自 v0.3.1 起 LSP 能力全部移交 dsh-lsp-core 管线，编辑器外壳语言无关化。仓库已并入 monorepo `dsh-ide-suite`（历史保留）。
+
+### 重构（LSP 拆分工程，阶段 1-3）
+
+- **统一 LSP 管线**：Python / TypeScript / PowerShell / Java 四语言全部走 `dsh-lsp-core` 注册表驱动链路（`lspCapabilities.acquire`），删除旧 LSP 桥（`lsp-service.ts`，370 行）与旧 `LspClient`（约 440 行）；新增语言插件零改编辑器。
+- **语言知识收敛**：`lspFor` / LSP 扩展启用 / 状态栏语言名与 LSP 会话组指示全部改走 `lspCapabilities.languageFor(path)`（LanguageSummary），`languageIdForPath` 删除——编辑器零语言知识。
+- **LSP 订阅统一**：诊断 / 状态 / 服务器完整错误（状态栏 hover）按会话组（sessionId）统一订阅管理；tsserver 一条会话服务 ts/tsx/js/jsx（不再每语言一进程）。
+- **依赖瘦身**：pyright / typescript-language-server 移交语言插件；PSES vendor 移交 dsh-lsp-powershell。
+
+### 修复
+
+- 启动崩溃：client inject 漏声明 `lspRegistry`（cordis 强制 inject）与 host 入口 inject 被 tsdown 摇掉（必须显式导出）两处产物级问题。
+- `.py` 文件打不开：CodeMirror 扩展跨 bundle 双副本抛 `Unrecognized extension value`——语法高亮改由本包内置表单副本构造，语言插件不注册 syntax。
+
+### 变化
+
+- 非 LSP 语言（json/md 等）状态栏语言名显示 `plaintext`（原显示 'json'/'markdown'）。
+- 语言插件的 LSP 服务器配置（如 pyright 宽松防误报）随插件分发，见各语言插件 CHANGELOG。
+
 ## [0.3.1] - 2026-08-21
 
 ### 修复

@@ -1,6 +1,6 @@
 {
   "name": "dsh-lsp-typescript",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "DSH TypeScript/JavaScript 语言插件：注册 ts/tsx/js/jsx 语言（LSP 服务器 typescript-language-server）到 dsh-lsp-core 注册表。语法高亮由 dsh-ide-layout 内置表提供（CodeMirror 扩展禁止跨 bundle 双副本）。",
   "type": "module",
   "main": "lib/index.js",

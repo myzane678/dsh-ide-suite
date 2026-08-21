@@ -1,6 +1,6 @@
 {
   "name": "dsh-lsp-java",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "DSH Java 语言插件：注册 java 语言到 dsh-lsp-core 注册表。LSP 服务器复用本机 Eclipse JDTLS（DSH_JAVA_LS_HOME / VS Code redhat.java 扩展），discover 探测 + commandFor 按 root 构造 -data 目录；找不到时 Java 降级纯高亮。",
   "type": "module",
   "main": "lib/index.js",

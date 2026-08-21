@@ -1,6 +1,6 @@
 {
   "name": "dsh-lsp-powershell",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "DSH PowerShell 语言插件：注册 ps1/psm1/psd1 语言（PowerShell Editor Services LSP，vendor 随包）到 dsh-lsp-core 注册表。语法高亮由 dsh-ide-layout 内置表提供（CodeMirror 扩展禁止跨 bundle 双副本）。",
   "type": "module",
   "main": "lib/index.js",

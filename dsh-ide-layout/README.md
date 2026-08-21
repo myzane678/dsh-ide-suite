@@ -2,6 +2,8 @@
 
 DSH（DeepSeek Harness）Web GUI 的 IDE 布局插件：左侧工作区文件树，中间 CodeMirror 6 编辑器 + xterm 终端，右侧 agent 对话。基于 DSH Web GUI 的会话工作目录真实文件系统，宿主进程经 `/dsh-ide/*` 路由提供服务。
 
+> v1.0.0 起 LSP 能力由 [dsh-lsp-core](../dsh-lsp-core) 及各语言插件（monorepo `dsh-ide-suite`）提供，本包为语言无关的编辑器外壳——新增语言插件无需改动本包。
+
 > 参考实现：dsh-web-ui / aionui-panel（Apache-2.0），本插件为其重新实现。
 
 ## 功能特性
@@ -20,13 +22,13 @@ DSH（DeepSeek Harness）Web GUI 的 IDE 布局插件：左侧工作区文件树
 - **GitLens 式行内 blame**：工具栏「○ Blame」开关（默认关，localStorage 记忆）→ 编辑器左侧 gutter 逐行标注「短 hash + 作者」，悬停浮层显示完整提交信息；状态栏光标行始终显示「◉ 作者 · 相对时间 · 短 hash」；工作区根非 Git 仓库时自动定位嵌套子仓库；未启用/编辑中整列不渲染
 
 ### LSP（语言服务器协议）
-> 仅对支持的语言启用（P2-04）：语法高亮覆盖 23 种格式，LSP 智能能力（补全/诊断/悬停/跳转/重命名等）面向 TS/Python/PowerShell，以及检测到 JDTLS 时的 Java。
+> v1.0.0：LSP 会话与服务器管理已移交 dsh-lsp-core 管线（`/dsh-lsp/ws` 桥，注册表驱动）。语法高亮覆盖 23 种格式（本包内置语法表）；LSP 智能能力（补全/诊断/悬停/跳转/重命名等）由安装的语言插件决定：
 
-- TypeScript / JavaScript：`typescript-language-server` 5.3.0
-- Python：`pyright` 1.1.413
-- PowerShell：**PowerShell Editor Services 4.7.0 + PSScriptAnalyzer**（`.ps1`/`.psm1`/`.psd1`；捆绑模块位于插件 `vendor/`，从 GitHub releases / PSGallery 手动更新，不入 git 仓库）
-- Java：**Eclipse JDT Language Server**（复用本机 Red Hat VS Code Java 扩展的 JDTLS；也可用 `DSH_JAVA_LS_HOME` 指定 JDTLS 根目录；需要 JDK 21+；未找到时自动降级为纯 Java 高亮）
-- 宿主进程为每个 WebSocket 连接启动一个语言服务器子进程（stdio ↔ WS 透传）
+- `dsh-lsp-typescript`：TypeScript / JavaScript（ts/tsx/js/jsx 共享一条 tsserver 会话）
+- `dsh-lsp-python`：Python（pyright，宽松配置防第三方库误报）
+- `dsh-lsp-powershell`：PowerShell（PowerShell Editor Services，vendor 随插件分发）
+- `dsh-lsp-java`：Java（复用本机 Red Hat VS Code Java 扩展的 JDTLS，或 `DSH_JAVA_LS_HOME`；未找到时自动降级纯高亮）
+- dsh-lsp-core 的宿主桥为每条 WebSocket 连接启动一个语言服务器子进程（stdio ↔ WS 透传；连接上限 8、单帧 4MB、URI 门禁、workspace 门禁）
 - ⚠️ Electron 宿主必须设置 `ELECTRON_RUN_AS_NODE=1`
 - 终端 / LSP WebSocket 与 HTTP 路由同级校验：仅接受本机 loopback + 同源 Origin 的连接
 
