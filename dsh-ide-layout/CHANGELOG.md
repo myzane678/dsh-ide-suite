@@ -2,6 +2,17 @@
 
 本项目版本与更新记录。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [1.2.0] - 2026-08-22
+
+### 新增
+
+- **右键「🔄 重启 LSP 连接」菜单项**（「🎨 格式化文档」下方，仅当前文件有 LSP 会话时显示）：EditorPane 新增 `lspTick` state + `restartLsp` 回调——tick +1 使 LSP 订阅 useEffect 重跑，cleanup `lspCapabilities.disposeRoot(root)` 销毁当前 root 全部会话，effect 按会话组重新 `acquire` + `connect`（新 WebSocket → 宿主桥重新 spawn 语言服务器子进程）；状态栏带 3s「正在重启 LSP 连接…」提示，订阅自动回「连接中…」→「已连接」。专治 fatal（WS 1011：服务器进程退出/门禁拒绝/服务器不可用）后停止重试的「LSP 不可用」，仅重建连接不动界面状态。
+
+### 改进
+
+- **补全门控（对齐 VS Code 触发字符语义）**：autocompletion override source 中，非显式触发时仅光标前为标识符字符（`[\w$]`）或 `.` 才返回补全；敲完括号/逗号/空格等标点后 source 返回 null 收起补全（此时应显示签名框）。
+- **签名框互斥 + 去闪烁**：`signatureTooltipField` 在补全框打开（`completionStatus !== null`）时隐藏签名框（等价 VS Code 参数提示让位）；updateListener 统一调度——括号闭合/补全框打开置 null（已在隐藏态不动防循环），括号内输入/移动则原位刷新签名内容（tooltip 不消失重弹）；响应回来时补全框已打开则丢弃（避免两框重叠）。
+
 ## [1.1.0] - 2026-08-22
 
 ### 新增

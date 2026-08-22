@@ -4,6 +4,25 @@ dsh-ide-suite（monorepo）版本与更新记录，跟随仓库 tag（v0.1.0 起
 
 v0.x 为 `dsh-ide-layout` 单包时代历史（全历史随 subtree 合入保留）；各子包完整明细见其各自 CHANGELOG：[layout](dsh-ide-layout/CHANGELOG.md) · [core](dsh-lsp-core/CHANGELOG.md) · [python](dsh-lsp-python/CHANGELOG.md) · [typescript](dsh-lsp-typescript/CHANGELOG.md) · [powershell](dsh-lsp-powershell/CHANGELOG.md) · [java](dsh-lsp-java/CHANGELOG.md)。
 
+## [1.2.0] - 2026-08-22
+
+编辑器交互打磨：右键「重启 LSP 连接」+ 补全/签名提示体验优化。仅 `dsh-ide-layout` 升级（1.1.0 → 1.2.0），其余六包不变。
+
+### 新增
+
+- **编辑器右键「🔄 重启 LSP 连接」菜单**（仅当前文件有 LSP 会话时显示）：`lspTick` +1 触发 LSP 订阅 effect 重跑——cleanup `disposeRoot` 销毁当前 root 全部会话，effect 按会话组重新 `acquire` + `connect`（新 WebSocket，宿主重新 spawn 语言服务器子进程）。专治 fatal（WS 1011：服务器进程退出/门禁拒绝/服务器不可用）停止重试后的「LSP 不可用」；仅重建连接，编辑器/终端/面板状态不受影响，状态栏自动回「连接中…」→「已连接」。
+
+### 改进
+
+- **补全门控对齐 VS Code 触发字符语义**：非显式触发（Ctrl+Space 除外）时，仅光标前为标识符字符或 `.` 才自动弹补全；敲完括号/逗号/空格等标点后不再弹候选（此时应显示签名框）。
+- **签名框与补全框互斥让位 + 去闪烁**：补全框打开时隐藏签名框（等价 VS Code 参数提示让位）；括号内输入/移动不再每次隐藏重弹，改为原位刷新签名内容。
+
+### 版本
+
+dsh-ide-layout 1.1.0 → 1.2.0；dsh-lsp-core / python / typescript / powershell / java / rust 不变。
+
+> dsh-lsp-powershell 的 vendor tgz 资产无变化，仍使用 v1.0.0 提供的 dsh-lsp-powershell-1.0.0.tgz。
+
 ## [1.1.0] - 2026-08-22
 
 Rust 插件首发 + 文件树搜索 + LSP 会话链路三处修复；CI 回归门禁上线。`dsh-ide-layout` / `dsh-lsp-core` 升至 1.1.0，`dsh-lsp-rust` 首发 0.1.0，python / typescript / powershell / java 不变（1.0.0）。
