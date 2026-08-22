@@ -250,8 +250,10 @@ export class LspSession implements LanguageCapability {
     this.socket.send(JSON.stringify(message))
   }
 
-  /** Fire a JSON-RPC request and await the result (10s timeout). */
-  request(method: string, params: unknown): Promise<unknown> {
+  /** Fire a JSON-RPC request and await the result (默认 10s 超时)。
+   *  initialize 等冷启动很慢的请求（JDTLS 的 OSGi + 工作区导入可达数十秒）
+   *  经 timeoutMs 单独放宽。 */
+  request(method: string, params: unknown, timeoutMs = 10_000): Promise<unknown> {
     return new Promise((resolve, reject) => {
       if (this.socket === null || this.socket.readyState !== WebSocket.OPEN) {
         reject(new Error('LSP socket not open'))
@@ -261,7 +263,7 @@ export class LspSession implements LanguageCapability {
       const timer = window.setTimeout(() => {
         this.pending.delete(id)
         reject(new Error(`LSP request timed out: ${method}`))
-      }, 10_000)
+      }, timeoutMs)
       this.pending.set(id, {
         resolve: (value) => { window.clearTimeout(timer); resolve(value) },
         reject: (error) => { window.clearTimeout(timer); reject(error) },
@@ -395,6 +397,9 @@ export class LspSession implements LanguageCapability {
 
   private async initialize(): Promise<void> {
     try {
+      // 60s：JDTLS（OSGi + 工作区导入）等重型服务器冷启动远超普通请求的 10s；
+      // 超时会触发重连风暴（每次重连桥再 spawn 一个 JVM 抢同一 -data 工作区锁，
+      // 后续实例启动即崩 → 状态栏「LSP 不可用」，还会占满桥的连接上限连累其他语言）。
       await this.request('initialize', {
         processId: null,
         rootUri: this.options.rootUri,
@@ -408,7 +413,7 @@ export class LspSession implements LanguageCapability {
           workspace: { configuration: true },
         },
         initializationOptions: this.options.config?.initializationOptions,
-      })
+      }, 60_000)
       this.notify('initialized', {})
       if (this.options.config?.didChangeConfiguration !== undefined) {
         this.notify('workspace/didChangeConfiguration', { settings: this.options.config.didChangeConfiguration })

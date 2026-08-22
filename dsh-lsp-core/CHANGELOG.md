@@ -4,6 +4,7 @@
 
 ### 修复
 
+- **JDTLS 等重型服务器 initialize 超时导致「LSP 不可用」并连累其他语言**：initialize 请求超时 10s → 60s。OSGi 系服务器（JDTLS）冷启动 + 工作区导入远超 10s，原超时触发重连风暴——桥每次重连再 spawn 一个 JVM 抢同一 `-data` 工作区锁，后续实例启动即崩（close 1011 → 状态栏「LSP 不可用」），风暴期间并发 JVM 还会占满桥的 8 连接上限，其他语言被拒后无限重连卡在「… 连接中…」。普通 LSP 请求仍为 10s。
 - **Node（undici）WebSocket error 事件内同步 close 重入爆栈**：`socket.onerror` 的 `close()` 改经 microtask 转发——undici 在 error 回调内同步 close 会重入 error 事件（同步递归，CI ubuntu 复现 RangeError）；浏览器行为无差异。（CI 首跑暴露，Windows 本地时序不触发。）
 
 ## [1.0.0] - 2026-08-22
