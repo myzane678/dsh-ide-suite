@@ -1,5 +1,6 @@
 # dsh-ide-suite
 
+[![CI](https://github.com/myzane678/dsh-ide-suite/actions/workflows/ci.yml/badge.svg)](https://github.com/myzane678/dsh-ide-suite/actions/workflows/ci.yml)
 [![Version](https://img.shields.io/badge/version-1.0.1-blue)](https://github.com/myzane678/dsh-ide-suite/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D22-green)](https://nodejs.org)

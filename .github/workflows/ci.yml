@@ -1,0 +1,32 @@
+# CI 回归门禁：六包 build + 全量测试（push main / PR 触发）。
+# 设计文档 §2 机制 #10（better-sidebar 先例）的落地——产物级问题虽需 GUI 实测，
+# 类型与构建门禁可挡住大部分低级回归。
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # pnpm 版本取根 package.json 的 packageManager 字段（pnpm@11.7.0）
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm -r --filter "./*" run build
+
+      - name: Test
+        run: pnpm -r --filter "./*" test
