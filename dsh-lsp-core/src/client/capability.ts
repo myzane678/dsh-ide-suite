@@ -330,7 +330,9 @@ export class LspSession implements LanguageCapability {
       this.scheduleReconnect()
     }
     socket.onerror = () => {
-      socket.close()
+      // 转 microtask 再 close：Node（undici）的 WebSocket 在 error 事件内同步
+      // close() 会重入 error 事件（同步递归爆栈，CI ubuntu 复现）；浏览器无差异。
+      Promise.resolve().then(() => socket.close())
     }
   }
 

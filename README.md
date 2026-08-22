@@ -5,9 +5,9 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D22-green)](https://nodejs.org)
 [![pnpm](https://img.shields.io/badge/pnpm-%3E%3D11-orange)](https://pnpm.io)
-[![Tests](https://img.shields.io/badge/tests-116%20passed-brightgreen)](#开发)
+[![Tests](https://img.shields.io/badge/tests-119%20passed-brightgreen)](#开发)
 
-DSH（DeepSeek Harness）Web GUI 的 IDE 插件套件（monorepo，pnpm workspace）：**编辑器外壳 + LSP 基础设施 + 四语言插件**。v1.0.0——LSP 拆分工程完成，编辑器语言无关化：新增一种语言的 LSP 支持 = 新增一个插件，编辑器零改动。
+DSH（DeepSeek Harness）Web GUI 的 IDE 插件套件（monorepo，pnpm workspace）：**编辑器外壳 + LSP 基础设施 + 五语言插件**。v1.0.0——LSP 拆分工程完成，编辑器语言无关化：新增一种语言的 LSP 支持 = 新增一个插件，编辑器零改动。
 
 ## 功能特性
 
@@ -29,6 +29,7 @@ DSH（DeepSeek Harness）Web GUI 的 IDE 插件套件（monorepo，pnpm workspac
 | `dsh-lsp-typescript` | TS / TSX / JS / JSX | typescript-language-server | 四种 languageId 共享一条 tsserver 会话 |
 | `dsh-lsp-powershell` | PowerShell | PowerShell Editor Services | vendor 随插件分发（Release tgz 资产） |
 | `dsh-lsp-java` | Java | Eclipse JDTLS | 复用本机 Red Hat VS Code Java 扩展或 `DSH_JAVA_LS_HOME`；未找到自动降级纯高亮 |
+| `dsh-lsp-rust` | Rust | rust-analyzer | 复用本机 rust-analyzer（rustup / `DSH_RUST_LS_HOME` / PATH）；未找到自动降级纯高亮 |
 
 架构要点：每条 WebSocket 连接对应一个语言服务器子进程（stdio ↔ WS 透传）；连接上限 8、单帧 4MB、URI 门禁（文件 URI 限授权工作区内）、workspace 门禁、本机 loopback + 同源 Origin 严格校验。
 
@@ -38,7 +39,7 @@ DSH（DeepSeek Harness）Web GUI 的 IDE 插件套件（monorepo，pnpm workspac
 |---|---|
 | `dsh-ide-layout` | 编辑器外壳（文件树 / 编辑器 / 终端 / Git / 问题面板 / 状态栏）——零语言知识，LSP 全部经 `lspCapabilities` |
 | `dsh-lsp-core` | LSP 基础设施：client 语言注册表 + 能力工厂（acquire / languageFor）；host 服务器注册表 + `/dsh-lsp/ws` 桥（commandFor / discover） |
-| `dsh-lsp-python` / `dsh-lsp-typescript` / `dsh-lsp-powershell` / `dsh-lsp-java` | 语言插件（dual-face：client 注册语言 + host 注册服务器） |
+| `dsh-lsp-python` / `dsh-lsp-typescript` / `dsh-lsp-powershell` / `dsh-lsp-java` / `dsh-lsp-rust` | 语言插件（dual-face：client 注册语言 + host 注册服务器） |
 
 每包为独立 DSH 插件：host 半区跑在宿主进程（Node/Electron），浏览器半区（`./client` 导出）跑在 Web GUI。
 
@@ -46,7 +47,7 @@ DSH（DeepSeek Harness）Web GUI 的 IDE 插件套件（monorepo，pnpm workspac
 
 - DSH Desktop（插件宿主）
 - 本地开发：Node ≥ 22、pnpm ≥ 11
-- 可选：PowerShell 7（`pwsh`，PowerShell 插件）、JDK 21+ 与 JDTLS（Java 插件）
+- 可选：PowerShell 7（`pwsh`，PowerShell 插件）、JDK 21+ 与 JDTLS（Java 插件）、rust-analyzer（Rust 插件，`rustup component add rust-analyzer`）
 
 ## 安装（DSH 插件）
 
@@ -84,7 +85,7 @@ git clone https://github.com/myzane678/dsh-ide-suite.git
 cd dsh-ide-suite
 pnpm install                        # 一次安装全部包
 pnpm -r --filter "./*" run build    # 全量构建（dual-face：host esm + browser cjs）
-pnpm -r --filter "./*" test         # 全量测试（116 项）
+pnpm -r --filter "./*" test         # 全量测试（119 项）
 pnpm --filter dsh-lsp-core test     # 单包测试
 ```
 

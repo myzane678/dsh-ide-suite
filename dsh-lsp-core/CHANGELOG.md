@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### 修复
+
+- **Node（undici）WebSocket error 事件内同步 close 重入爆栈**：`socket.onerror` 的 `close()` 改经 microtask 转发——undici 在 error 回调内同步 close 会重入 error 事件（同步递归，CI ubuntu 复现 RangeError）；浏览器行为无差异。（CI 首跑暴露，Windows 本地时序不触发。）
+
 ## [1.0.0] - 2026-08-22
 
 LSP 拆分工程阶段 0-3 完成，dsh-ide-suite monorepo 首个里程碑版本。

@@ -1,0 +1,5 @@
+# dsh-lsp-rust bundle patch: registers the dual-face plugin row
+# (host half = rust-analyzer 服务器配置；client half = Rust 语言注册)。
+- insert:
+    - id: lsp-rust
+      name: 'dsh-lsp-rust'

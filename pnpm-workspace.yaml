@@ -5,6 +5,7 @@ packages:
   - 'dsh-lsp-typescript'
   - 'dsh-lsp-powershell'
   - 'dsh-lsp-java'
+  - 'dsh-lsp-rust'
 
 allowBuilds:
   node-pty: true
