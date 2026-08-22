@@ -17,6 +17,10 @@ interface FileTreeProps {
   /** 外部 fs 变更计数器：变化时轻量重载（保留展开），不重挂载组件。 */
   treeTick?: number
   onOpenFile: (path: string) => void
+  /** 右键「🔨 构建项目」（目标为项目标记文件或根时显示）。 */
+  onBuildProject?: (relPath: string) => void
+  /** 右键「▶ 运行项目」（目标为项目标记文件或根时显示）。 */
+  onRunProject?: (relPath: string) => void
 }
 
 const FILE_ICON_COLOR = '#6b7280'
@@ -267,11 +271,22 @@ function renderChildren(opts: RenderOpts): ReactNode {
   return <div>{rows}</div>
 }
 
+/** 目标是否为 Java 项目标记（pom.xml / build.gradle / settings.gradle）或工作区根。 */
+function isProjectTarget(menu: MenuState): boolean {
+  if (menu.path === '') return true
+  const name = menu.path.split('/').pop() ?? ''
+  return name === 'pom.xml' || name === 'build.gradle' || name === 'settings.gradle'
+}
+
 function menuItemsFor(menu: MenuState): MenuItem[] {
   const createItems: MenuItem[] = menu.isDir
     ? [{ id: 'new-file', label: '新建文件' }, { id: 'new-dir', label: '新建文件夹' }]
     : []
+  const projectItems: MenuItem[] = isProjectTarget(menu)
+    ? [{ id: 'build-project', label: '🔨 构建项目' }, { id: 'run-project', label: '▶ 运行项目' }, 'sep']
+    : []
   return [
+    ...projectItems,
     { id: 'reveal', label: '在资源管理器中显示' },
     { id: 'copy-abs', label: '复制路径' },
     { id: 'copy-rel', label: '复制相对路径' },
@@ -283,7 +298,7 @@ function menuItemsFor(menu: MenuState): MenuItem[] {
   ]
 }
 
-export function FileTree({ root, treeTick = 0, onOpenFile }: FileTreeProps): JSX.Element {
+export function FileTree({ root, treeTick = 0, onOpenFile, onBuildProject, onRunProject }: FileTreeProps): JSX.Element {
   const [data, setData] = useState<Record<string, LevelData>>({})
   const dataRef = useRef(data)
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
@@ -445,6 +460,10 @@ export function FileTree({ root, treeTick = 0, onOpenFile }: FileTreeProps): JSX
     setMenu(null)
     if (id === 'reveal') {
       void apiReveal(root, target.path)
+    } else if (id === 'build-project') {
+      onBuildProject?.(target.path)
+    } else if (id === 'run-project') {
+      onRunProject?.(target.path)
     } else if (id === 'copy-abs' || id === 'copy-rel') {
       const text = id === 'copy-abs' ? absolutePath(root, target.path) : target.path
       void writeClipboard(text).then((ok) => {

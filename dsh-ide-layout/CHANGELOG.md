@@ -2,6 +2,21 @@
 
 本项目版本与更新记录。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [1.3.0] - 2026-08-23
+
+### 新增
+
+- **Java 工具链 A 方案：构建任务 + 项目运行**（`/dsh-ide/build` 路由 + build-service）：
+  - host `src/host/build-service.ts`：`detectJavaProject`（BFS 下探 4 层找 pom.xml/build.gradle/settings.gradle，wrapper 优先，跳过 target/node_modules 等）、`findMainClasses`（src/main/java 主类探测）、`planBuild`（compile/test）、`runProject`（Maven 三步：compile → dependency:build-classpath → `java -cp target/classes;<deps>` 主类；Gradle 走 gradlew run）
+  - `src/host/routes.ts` 新增 `/dsh-ide/build`：复用 workspace 门禁 + 并发上限，超时 120s、输出上限 8MB；Maven 多主类返回 `{ needMain, candidates }` 由前端选择；`spawnCommand` 重构——Windows `.cmd/.bat` 统一 `cmd.exe /d /s /c` + 逐参 `cmdQuote` 转义（弃 shell:true 裸拼接，防注入）；`runProcess` 参数化 timeoutMs
+  - client：`api.ts` 加 `apiBuild`/`BuildResult`；新增 `BuildOutputDialog.tsx`（portal 模态：运行中/成功/失败/超时/截断/多主类选择）；`FileTree.tsx` 对项目根或标记文件右键「🔨 构建项目」「▶ 运行项目」；`mount.tsx` SidebarTree 接线（构建状态 + 换工作区丢弃守卫）
+  - 测试：`tests/build-service.test.ts` 17 项（识别/wrapper 优先级/深度限制/主类探测/Maven 三步序列/编译失败短路）；全量 95 项测试 + build 通过
+- **对话消息导航条 MessageNav**（`src/client/components/MessageNav.tsx`）：
+  - 聊天区右缘节点条：每条真实用户消息一个短横线节点，跟随阅读位置（品牌蓝高亮）
+  - 悬停「放大」复刻 DeepSeek 网页版 ScrollNav：34px 细竖轨 → 240px 消息面板（宽度过渡 + 文字渐显），指示线同步加深；点击平滑跳转 + 目标行闪烁（按需 loadOlder 补历史）
+  - 动态避让：ResizeObserver 测量聊天滚动区右缘，编辑器打开时自动贴合聊天区不遮编辑器；深色主题适配；<2 条消息自动隐藏
+  - `src/client/index.ts` 挂载 `mountMessageNav(ctx)`（独立容错，失败不影响 IDE 布局）
+
 ## [1.2.0] - 2026-08-22
 
 ### 新增

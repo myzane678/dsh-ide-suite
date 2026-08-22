@@ -4,6 +4,21 @@ dsh-ide-suite（monorepo）版本与更新记录，跟随仓库 tag（v0.1.0 起
 
 v0.x 为 `dsh-ide-layout` 单包时代历史（全历史随 subtree 合入保留）；各子包完整明细见其各自 CHANGELOG：[layout](dsh-ide-layout/CHANGELOG.md) · [core](dsh-lsp-core/CHANGELOG.md) · [python](dsh-lsp-python/CHANGELOG.md) · [typescript](dsh-lsp-typescript/CHANGELOG.md) · [powershell](dsh-lsp-powershell/CHANGELOG.md) · [java](dsh-lsp-java/CHANGELOG.md)。
 
+## [1.3.0] - 2026-08-23
+
+Java 工具链 A 方案（构建/运行项目）+ 对话消息导航条（复刻网页版 ScrollNav）。仅 `dsh-ide-layout` 升级（1.2.0 → 1.3.0），其余六包不变。
+
+### 新增
+
+- **Java 工具链 A 方案**：文件树对项目根/标记文件右键「🔨 构建项目」「▶ 运行项目」——`/dsh-ide/build` 路由（workspace 门禁 + 120s 超时 + 8MB 输出上限）驱动 build-service（Maven 三步 / Gradle gradlew run、wrapper 优先、主类探测、多主类前端选择）；`spawnCommand` 重构（Windows cmd /c + cmdQuote 逐参转义，防注入）。
+- **对话消息导航条 MessageNav**：聊天区右缘短横线节点条（每条用户消息一个节点），悬停「放大」为 240px 消息面板（复刻 DeepSeek 网页版 ScrollNav），点击跳转 + 目标行闪烁；动态避让贴合聊天区右缘，不遮编辑器。
+
+### 版本
+
+dsh-ide-layout 1.2.0 → 1.3.0；dsh-lsp-core / python / typescript / powershell / java / rust 不变。
+
+> dsh-lsp-powershell 的 vendor tgz 资产无变化，仍使用 v1.0.0 提供的 dsh-lsp-powershell-1.0.0.tgz。
+
 ## [1.2.0] - 2026-08-22
 
 编辑器交互打磨：右键「重启 LSP 连接」+ 补全/签名提示体验优化。仅 `dsh-ide-layout` 升级（1.1.0 → 1.2.0），其余六包不变。

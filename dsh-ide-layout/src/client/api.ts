@@ -80,6 +80,29 @@ export function apiRun(root: string, path: string): Promise<Envelope<RunResult>>
   return post<RunResult>('/dsh-ide/run', { root, path })
 }
 
+/** 一次构建/运行项目的完整结果（与单文件 RunResult 同形状）。 */
+export interface BuildResult {
+  exitCode: number | null
+  signal: string | null
+  timedOut: boolean
+  stdout: string
+  stderr: string
+  stdoutTruncated: boolean
+  stderrTruncated: boolean
+  durationMs: number
+  /** spawn 失败（如 mvn/gradlew 不存在）时的错误信息。 */
+  error?: string
+}
+
+/** /dsh-ide/build 响应：正常结果，或「需先选主类」（Maven 多主类场景）。 */
+export type BuildResponse = BuildResult | { needMain: true; candidates: string[] }
+
+export type BuildTaskName = 'compile' | 'test' | 'run'
+
+export function apiBuild(root: string, task: BuildTaskName, mainClass?: string): Promise<Envelope<BuildResponse>> {
+  return post<BuildResponse>('/dsh-ide/build', { root, task, mainClass: mainClass ?? '' })
+}
+
 /** git 面板数据与操作（与 host 侧 git.ts 对应）。 */
 export interface GitStatusEntry {
   path: string

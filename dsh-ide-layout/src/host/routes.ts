@@ -6,7 +6,8 @@
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { spawn } from 'node:child_process'
+import { spawn, type ChildProcess } from 'node:child_process'
+import { readFileSync, readdirSync } from 'node:fs'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, relative } from 'node:path'
@@ -17,6 +18,15 @@ import { isTextEncodingId } from '../core/encoding.ts'
 import type { FsService } from './fs-service.ts'
 import * as git from './git.ts'
 import { isLoopbackRequest } from './security.ts'
+import {
+  BUILD_OUTPUT_CAP,
+  BUILD_TIMEOUT_MS,
+  detectJavaProject,
+  findMainClasses,
+  planBuild,
+  runProject,
+} from './build-service.ts'
+import type { BuildStep, BuildTask, DirEntry, ExecOutcome } from './build-service.ts'
 
 const OK = (value: unknown): { ok: true; value: unknown } => ({ ok: true, value })
 const FAIL = (error: PanelError): { ok: false; error: PanelError } => ({ ok: false, error })
@@ -48,27 +58,52 @@ interface ProcessResult {
   timedOut: boolean
 }
 
+/** cmd.exe 参数转义：含特殊字符的参数包引号，内部双引号双写（cmd 引号规则）。
+ *  仅用于 Windows 批处理命令（.cmd/.bat），避免 shell 拼接注入。 */
+function cmdQuote(arg: string): string {
+  if (arg === '' || /[ \t&()<>^|"%]/.test(arg)) {
+    return `"${arg.replace(/"/g, '""')}"`
+  }
+  return arg
+}
+
+/**
+ * Spawn one child. Windows 批处理（.cmd/.bat）不能直接 spawn（EINVAL）——
+ * mvn.cmd / mvnw.cmd / gradlew.bat 统一经 cmd.exe /d /s /c 执行：整个命令行
+ * 作为一个带引号参数传给 cmd（/s 剥外层引号），参数逐项 cmdQuote 转义，
+ * 避免 node shell:true 的裸拼接注入面。其余（exe/java）保持直接 spawn。
+ */
+function spawnCommand(command: string, args: string[], cwd: string): ChildProcess {
+  const options = {
+    cwd,
+    env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+    windowsHide: true,
+  }
+  if (process.platform === 'win32' && /\.(cmd|bat)$/i.test(command)) {
+    const cmdline = [cmdQuote(command), ...args.map(cmdQuote)].join(' ')
+    return spawn('cmd.exe', ['/d', '/s', '/c', cmdline], options)
+  }
+  return spawn(command, args, options)
+}
+
 /** 在宿主侧执行一个受限子进程；Java 编译和运行共用同一套超时/输出上限。 */
 function runProcess(
   command: string,
   args: string[],
   cwd: string,
   appendChunk: (target: 'out' | 'err', chunk: Buffer) => void,
+  timeoutMs = RUN_TIMEOUT_MS,
 ): Promise<ProcessResult> {
   return new Promise((done) => {
     let timedOut = false
     let settled = false
-    const child = spawn(command, args, {
-      cwd,
-      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
-      windowsHide: true,
-    })
+    const child = spawnCommand(command, args, cwd)
     child.stdout?.on('data', (chunk: Buffer) => appendChunk('out', chunk))
     child.stderr?.on('data', (chunk: Buffer) => appendChunk('err', chunk))
     const timer = setTimeout(() => {
       timedOut = true
       child.kill()
-    }, RUN_TIMEOUT_MS)
+    }, timeoutMs)
     const finish = (result: Omit<ProcessResult, 'timedOut'>): void => {
       if (settled) return
       settled = true
@@ -78,6 +113,55 @@ function runProcess(
     child.on('error', (error) => finish({ error: error.message }))
     child.on('close', (code, signal) => finish({ code, signal }))
   })
+}
+
+/** 同步列目录（项目识别/主类探测注入）。 */
+function listDirSync(abs: string): DirEntry[] {
+  return readdirSync(abs, { withFileTypes: true }).map((entry) => ({ name: entry.name, isDir: entry.isDirectory() }))
+}
+
+/** 一次构建/运行的完整结果（ExecOutcome 的展示形状，含截断与耗时）。 */
+interface BuildOutcome extends ExecOutcome {
+  stdoutTruncated: boolean
+  stderrTruncated: boolean
+  durationMs: number
+  /** spawn 失败（如命令不存在）时的错误信息。 */
+  error?: string
+}
+
+/** 构建执行器：每步独立超时（120s）/输出上限（8MB），跨步共用累计。 */
+function createBuildExec(): (step: BuildStep) => Promise<BuildOutcome> {
+  return async (step) => {
+    let stdout = ''
+    let stderr = ''
+    let stdoutTruncated = false
+    let stderrTruncated = false
+    const start = Date.now()
+    const append = (target: 'out' | 'err', chunk: Buffer): void => {
+      if (target === 'out') {
+        if (stdout.length >= BUILD_OUTPUT_CAP) return
+        stdout += chunk.toString('utf8')
+        if (stdout.length > BUILD_OUTPUT_CAP) { stdout = stdout.slice(0, BUILD_OUTPUT_CAP); stdoutTruncated = true }
+      } else {
+        if (stderr.length >= BUILD_OUTPUT_CAP) return
+        stderr += chunk.toString('utf8')
+        if (stderr.length > BUILD_OUTPUT_CAP) { stderr = stderr.slice(0, BUILD_OUTPUT_CAP); stderrTruncated = true }
+      }
+    }
+    const result = await runProcess(step.command, step.args, step.cwd, append, BUILD_TIMEOUT_MS)
+    const outcome: BuildOutcome = {
+      exitCode: result.code ?? null,
+      signal: result.signal ?? null,
+      timedOut: result.timedOut,
+      stdout,
+      stderr,
+      stdoutTruncated,
+      stderrTruncated,
+      durationMs: Date.now() - start,
+    }
+    if (result.error !== undefined) outcome.error = result.error
+    return outcome
+  }
 }
 
 /** Java 单文件入口：只支持一个源文件，编译产物写入系统临时目录，不污染工作区。 */
@@ -450,6 +534,54 @@ export function registerPanelRoutes(ctx: Context, fs: FsService): () => void {
           durationMs: Date.now() - start,
         }))
         return
+      }
+      case '/dsh-ide/build': {
+        const taskRaw = strField(payload, 'task')
+        if (taskRaw !== 'compile' && taskRaw !== 'test' && taskRaw !== 'run') {
+          json(res, FAIL(BAD_REQUEST))
+          return
+        }
+        const task: BuildTask = taskRaw
+        const mainClass = strField(payload, 'mainClass')
+        const gated = await fs.verify(root)
+        if (!gated.ok || gated.canonical === undefined) {
+          json(res, FAIL(gated.error ?? { code: 'forbidden', message: 'root not gated' }))
+          return
+        }
+        const project = detectJavaProject(gated.canonical, listDirSync)
+        if (project === null) {
+          json(res, FAIL({ code: 'no-project', message: '未找到 Maven/Gradle 项目（pom.xml / build.gradle / settings.gradle）' }))
+          return
+        }
+        // 与单文件运行共用并发上限：构建同样会拉起子进程。
+        if (runActiveCount >= RUN_MAX_CONCURRENT) {
+          json(res, FAIL({ code: 'run-busy', message: `同时运行的任务已达上限（${RUN_MAX_CONCURRENT} 个），请稍后再试` }))
+          return
+        }
+        runActiveCount += 1
+        try {
+          // Maven 运行且未指定主类：先探测——0 个报错，多个让前端选择后带 mainClass 重试。
+          if (task === 'run' && project.type === 'maven' && mainClass === null) {
+            const mains = findMainClasses(project.projectDir, listDirSync, (file) => readFileSync(file, 'utf8'))
+            if (mains.length === 0) {
+              json(res, FAIL({ code: 'no-main', message: '未在 src/main/java 找到 public static void main 方法' }))
+              return
+            }
+            if (mains.length > 1) {
+              json(res, OK({ needMain: true, candidates: mains }))
+              return
+            }
+            json(res, OK(await runProject(project, mains[0], createBuildExec())))
+            return
+          }
+          const outcome = task === 'run'
+            ? await runProject(project, mainClass ?? '', createBuildExec())
+            : await createBuildExec()(planBuild(project, task))
+          json(res, OK(outcome))
+          return
+        } finally {
+          runActiveCount = Math.max(0, runActiveCount - 1)
+        }
       }
       case '/dsh-ide/git/status': {
         // status 是只读探测：root 非仓库（含父仓库子目录）时返回 isRepo:false，

@@ -17,6 +17,7 @@ import { createStore, IDE_DEFAULT, LAYOUT_DEFAULT, type IdeState } from './store
 import { mountPanels, type IdeMountApi } from './mount.tsx'
 import { subscribeChanges } from './api.ts'
 import { openFileInTabs } from './components/EditorPane.tsx'
+import { mountMessageNav } from './components/MessageNav.tsx'
 
 /** Required services: sessions + workspaces for the project root. */
 export const inject = ['sessions', 'workspaces', 'lspCapabilities']
@@ -145,10 +146,19 @@ export function apply(ctx: ClientContext): void {
       console.error('[dsh-ide-layout] mount failed:', error)
     }
 
+    // 消息导航条（右缘节点条）：独立挂载，失败不影响 IDE 主布局。
+    let disposeMessageNav: (() => void) | undefined
+    try {
+      disposeMessageNav = mountMessageNav(ctx)
+    } catch (error) {
+      console.error('[dsh-ide-layout] message-nav mount failed:', error)
+    }
+
     return () => {
       if (treeRefreshTimer !== undefined) clearTimeout(treeRefreshTimer)
       disposeEvents?.()
       disposePanels?.()
+      disposeMessageNav?.()
       for (const dispose of disposers) dispose()
       controller.dispose()
     }

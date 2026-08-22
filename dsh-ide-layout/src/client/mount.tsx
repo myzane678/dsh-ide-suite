@@ -3,7 +3,7 @@
  *  region) so sidebar and tree form one left column; the workbench portal
  *  hosts only the editor. */
 
-import { useEffect, useState, createElement, type JSX, type CSSProperties } from 'react'
+import { useEffect, useRef, useState, createElement, type JSX, type CSSProperties } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import type { LspCapabilityService } from 'dsh-lsp-core/client'
 import type { IdeState, ListenerStore } from './store.ts'
@@ -11,6 +11,9 @@ import { FileTree } from './components/FileTree.tsx'
 import { EditorPane } from './components/EditorPane.tsx'
 import { GitPanel } from './components/GitPanel.tsx'
 import { ProblemsPanel } from './components/ProblemsPanel.tsx'
+import { BuildOutputDialog } from './components/BuildOutputDialog.tsx'
+import { apiBuild } from './api.ts'
+import type { BuildResult, BuildTaskName } from './api.ts'
 
 const WORKBENCH_SELECTOR = '[data-ide-workbench]'
 const SIDEBAR_TREE_SELECTOR = '[data-ide-sidebar-tree]'
@@ -60,6 +63,16 @@ export interface IdeMountApi {
   lspCapabilities?: LspCapabilityService
 }
 
+/** 构建输出对话框状态（见 SidebarTree）。 */
+interface BuildDialogState {
+  title: string
+  phase: 'running' | 'done'
+  result?: BuildResult
+  error?: string
+  needMain?: boolean
+  candidates?: string[]
+}
+
 /** The sidebar file tree: follows the ide root (workspace/session).
  *  v13: 顶部「文件 | Git」视图切换；Git 面板复用同一块区域。
  *  v15: 加「问题」视图（LSP 诊断聚合）。
@@ -70,6 +83,9 @@ function SidebarTree({ api }: { api: IdeMountApi }): JSX.Element {
   useEffect(() => api.ide.subscribe(() => force((n) => n + 1)), [api.ide])
   const state = api.ide.getSnapshot()
   const [view, setView] = useState<'files' | 'git' | 'problems'>('files')
+  const [build, setBuild] = useState<BuildDialogState | null>(null)
+  /** 发起构建时的工作区根：响应回来若已切换工作区则丢弃（防串对话框）。 */
+  const buildRootRef = useRef('')
   // 诊断计数角标：聚合所有打开文件的 LSP 诊断（错误+警告）。
   const problemCount = Object.values(state.diagnostics).reduce((total, list) => total + list.length, 0)
   const viewTitle = view === 'files' ? '资源管理器' : view === 'git' ? '源代码管理' : '问题'
@@ -83,6 +99,49 @@ function SidebarTree({ api }: { api: IdeMountApi }): JSX.Element {
     borderRadius: 4, cursor: 'pointer', fontSize: 11, fontFamily: 'inherit',
     whiteSpace: 'nowrap', position: 'relative',
   })
+  /** 发起构建/测试/运行；Maven 多主类时响应切到「选择主类」态。 */
+  const startBuild = (task: BuildTaskName): void => {
+    const title = task === 'compile' ? '🔨 构建项目' : task === 'test' ? '🔨 测试项目' : '▶ 运行项目'
+    buildRootRef.current = state.root
+    setBuild({ title, phase: 'running' })
+    void apiBuild(state.root, task).then((result) => {
+      if (api.ide.getSnapshot().root !== buildRootRef.current) {
+        setBuild(null)
+        return
+      }
+      if (result.ok) {
+        const value = result.value
+        setBuild('needMain' in value
+          ? { title, phase: 'done', needMain: true, candidates: value.candidates }
+          : { title, phase: 'done', result: value })
+      } else {
+        setBuild({ title, phase: 'done', error: result.error.message })
+      }
+    })
+  }
+
+  /** 多主类选择后带 mainClass 重新发起运行。 */
+  const pickMain = (mainClass: string): void => {
+    if (build === null) return
+    const title = build.title
+    buildRootRef.current = state.root
+    setBuild({ title, phase: 'running' })
+    void apiBuild(state.root, 'run', mainClass).then((result) => {
+      if (api.ide.getSnapshot().root !== buildRootRef.current) {
+        setBuild(null)
+        return
+      }
+      if (result.ok) {
+        const value = result.value
+        setBuild('needMain' in value
+          ? { title, phase: 'done', needMain: true, candidates: value.candidates }
+          : { title, phase: 'done', result: value })
+      } else {
+        setBuild({ title, phase: 'done', error: result.error.message })
+      }
+    })
+  }
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
       {/* 标题行：当前视图名 + Git/问题 切换按钮 */}
@@ -128,12 +187,32 @@ function SidebarTree({ api }: { api: IdeMountApi }): JSX.Element {
         </button>
       </div>
       <div style={{ flex: 1, minHeight: 0 }}>
-        {view === 'files' && <FileTree root={state.root} treeTick={state.treeTick} onOpenFile={api.openFile} />}
+        {view === 'files' && (
+          <FileTree
+            root={state.root}
+            treeTick={state.treeTick}
+            onOpenFile={api.openFile}
+            onBuildProject={() => startBuild('compile')}
+            onRunProject={() => startBuild('run')}
+          />
+        )}
         {view === 'git' && <GitPanel root={state.root} />}
         {view === 'problems' && (
           <ProblemsPanel root={state.root} diagnostics={state.diagnostics} onOpenFile={api.openFile} />
         )}
       </div>
+      {build !== null && (
+        <BuildOutputDialog
+          title={build.title}
+          phase={build.phase}
+          result={build.result}
+          error={build.error}
+          needMain={build.needMain}
+          candidates={build.candidates}
+          onClose={() => setBuild(null)}
+          onPickMain={pickMain}
+        />
+      )}
     </div>
   )
 }
