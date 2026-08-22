@@ -106,6 +106,18 @@ export function apply(ctx: ClientContextLike): void {
       if (descriptor === undefined) return null
       return { id: descriptor.id, displayName: descriptor.displayName, sessionId: descriptor.sessionId ?? descriptor.id }
     },
+    sessionLanguages() {
+      // 注册表派生 + 按 sessionId 去重（组内取第一个 descriptor 的 id 供 acquire）。
+      const seen = new Set<string>()
+      const out: Array<{ id: string; sessionId: string }> = []
+      for (const descriptor of registry.list()) {
+        const sessionId = descriptor.sessionId ?? descriptor.id
+        if (seen.has(sessionId)) continue
+        seen.add(sessionId)
+        out.push({ id: descriptor.id, sessionId })
+      }
+      return out
+    },
   }
   ctx.provide('lspCapabilities', capabilities)
   console.log('[dsh-lsp-core] client half loaded')

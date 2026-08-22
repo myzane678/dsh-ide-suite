@@ -1458,19 +1458,16 @@ export function EditorPane({
 
   // 每 root LSP 会话（阶段 2 统一链路）：按会话组 acquire 各语言会话并订阅
   // 诊断/状态/服务器日志；未注册语言（语言插件未装）acquire 返回 null 跳过。
-  // root 变化时 disposeRoot 整体重建。ts 系四个 languageId 共享 'typescript'
-  // 会话（注册表 sessionId 归一，一条 tsserver 服务 ts/tsx/js/jsx）。
+  // root 变化时 disposeRoot 整体重建。会话组列表由 lsp-core 注册表驱动
+  // （sessionLanguages，按 sessionId 去重）——ts 系四个 languageId 共享
+  // 'typescript' 一条；新增语言插件零改编辑器（曾硬编码四语言，rust 踩坑）。
   useEffect(() => {
     if (root === '' || lspCapabilities === undefined) {
       setDiagMap(new Map())
       return
     }
-    const SESSION_LANGUAGES: ReadonlyArray<{ language: string; key: string }> = [
-      { language: 'typescript', key: 'typescript' },
-      { language: 'python', key: 'python' },
-      { language: 'powershell', key: 'powershell' },
-      { language: 'java', key: 'java' },
-    ]
+    const SESSION_LANGUAGES: ReadonlyArray<{ language: string; key: string }> =
+      lspCapabilities.sessionLanguages().map(({ id, sessionId }) => ({ language: id, key: sessionId }))
     const disposers: Array<() => void> = []
     setDiagMap(new Map())
     for (const { language, key } of SESSION_LANGUAGES) {

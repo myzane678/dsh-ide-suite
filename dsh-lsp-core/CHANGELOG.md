@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### 新增
+
+- **`lspCapabilities.sessionLanguages()`**：注册表驱动的会话组列表（按 sessionId 去重）——编辑器逐组 acquire + 订阅状态不再硬编码语言清单（阶段 3 收敛漏网：dsh-ide-layout 曾硬编码四语言，dsh-lsp-rust 踩中——状态无人订阅永远显示「… LSP」）。新语言插件注册后自动进列表，编辑器零改动承诺补全。
+
 ### 修复
 
 - **JDTLS 等重型服务器 initialize 超时导致「LSP 不可用」并连累其他语言**：initialize 请求超时 10s → 60s。OSGi 系服务器（JDTLS）冷启动 + 工作区导入远超 10s，原超时触发重连风暴——桥每次重连再 spawn 一个 JVM 抢同一 `-data` 工作区锁，后续实例启动即崩（close 1011 → 状态栏「LSP 不可用」），风暴期间并发 JVM 还会占满桥的 8 连接上限，其他语言被拒后无限重连卡在「… 连接中…」。普通 LSP 请求仍为 10s。

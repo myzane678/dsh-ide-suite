@@ -203,6 +203,13 @@ export interface LspCapabilityService {
    * 状态栏展示用它，无需持有 lspRegistry。未注册（无语言插件）返回 null。
    */
   languageFor(path: string): LanguageSummary | null
+  /**
+   * 已注册语言的会话组列表（注册表驱动，按 sessionId 去重——typescript 系
+   * 四个 languageId 共享 'typescript' 组只返回一条）：编辑器逐组 acquire 并
+   * 订阅状态/诊断，新增语言插件零改编辑器（阶段 3 收敛漏网：EditorPane 曾
+   * 硬编码四种语言，rust 插件踩中——状态无人订阅，永远显示「… LSP」）。
+   */
+  sessionLanguages(): ReadonlyArray<{ id: string; sessionId: string }>
   disposeRoot(root: string): void
 }
 
