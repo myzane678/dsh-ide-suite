@@ -182,6 +182,7 @@ export function attachLspSocket(ctx: unknown, req: IncomingMessage, ws: WebSocke
     try {
       const registry = getLspServerRegistry(ctx)
       if (registry === undefined) {
+        console.error('[dsh-lsp] close 1011: lsp server registry unavailable（host 侧 lsp-core 注册表缺失）')
         closeWs(ws, 1011, 'lsp server registry unavailable')
         return
       }
@@ -198,21 +199,25 @@ export function attachLspSocket(ctx: unknown, req: IncomingMessage, ws: WebSocke
       }
       const config = registry.match(language)
       if (config === undefined) {
+        console.error(`[dsh-lsp] close 1008: unsupported language "${language}"（host 侧语言插件未注册——查插件是否加载）`)
         closeWs(ws, 1008, `unsupported language: ${language}`)
         return
       }
       const gated = await createWorkspaceGate(ctx)(root)
       if (!gated.ok) {
+        console.error(`[dsh-lsp] close 1011: workspace gate rejected root="${root}" language="${language}": ${gated.error.message}`)
         closeWs(ws, 1011, gated.error.message)
         return
       }
       // P1-03：连接数上限——异常/恶意客户端不能批量拉起 LSP 子进程。
       if (lspActiveCount >= LSP_MAX_CONNECTIONS) {
+        console.error(`[dsh-lsp] close 1013: too many LSP connections (${LSP_MAX_CONNECTIONS}) language="${language}"`)
         closeWs(ws, 1013, `too many LSP connections (${LSP_MAX_CONNECTIONS})`)
         return
       }
       const command = await resolveServerCommand(config, gated.canonical)
       if (command === undefined || command === null || command.length === 0) {
+        console.error(`[dsh-lsp] close 1011: language server unavailable: ${language}（discover 返回 null——服务器未安装/未找到，降级纯高亮）`)
         closeWs(ws, 1011, `language server unavailable: ${language}`)
         return
       }
@@ -241,10 +246,13 @@ export function attachLspSocket(ctx: unknown, req: IncomingMessage, ws: WebSocke
       })
       bridge.child.on('error', (error) => {
         bridge.exited = true
+        console.error(`[dsh-lsp] close 1011: spawn error language="${language}" command="${command[0]}": ${error.message}`)
         if (ws.readyState === WebSocket.OPEN) closeWs(ws, 1011, `language server error: ${error.message}`)
       })
       bridge.child.on('exit', (code, signal) => {
         bridge.exited = true
+        // 无论 stderr 是否为空都留一行宿主日志（stderr 空的静默退出最可疑）。
+        console.error(`[dsh-lsp] ${language} exited (${signal ?? `code ${code ?? '?'}`})`)
         // 完整 stderr（去 ANSI 转义）进宿主日志——不截断，排查服务器启动失败
         // 时能看到完整错误（ws reason 只有 123 字节装不下，靠这里留痕）。
         if (bridge.stderrTail !== '') {
