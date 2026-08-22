@@ -1,10 +1,11 @@
 # Changelog
 
-## [Unreleased]
+## [1.1.0] - 2026-08-22
 
 ### 新增
 
 - **`lspCapabilities.sessionLanguages()`**：注册表驱动的会话组列表（按 sessionId 去重）——编辑器逐组 acquire + 订阅状态不再硬编码语言清单（阶段 3 收敛漏网：dsh-ide-layout 曾硬编码四语言，dsh-lsp-rust 踩中——状态无人订阅永远显示「… LSP」）。新语言插件注册后自动进列表，编辑器零改动承诺补全。
+- 桥全拒绝路径（注册表缺失 / 语言未注册 / 工作区门禁 / 连接上限 / discover 失败 / spawn 错误 / 子进程退出）加宿主侧诊断日志。
 
 ### 修复
 

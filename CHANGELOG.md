@@ -4,6 +4,23 @@ dsh-ide-suite（monorepo）版本与更新记录，跟随仓库 tag（v0.1.0 起
 
 v0.x 为 `dsh-ide-layout` 单包时代历史（全历史随 subtree 合入保留）；各子包完整明细见其各自 CHANGELOG：[layout](dsh-ide-layout/CHANGELOG.md) · [core](dsh-lsp-core/CHANGELOG.md) · [python](dsh-lsp-python/CHANGELOG.md) · [typescript](dsh-lsp-typescript/CHANGELOG.md) · [powershell](dsh-lsp-powershell/CHANGELOG.md) · [java](dsh-lsp-java/CHANGELOG.md)。
 
+## [1.1.0] - 2026-08-22
+
+Rust 插件首发 + 文件树搜索 + LSP 会话链路三处修复；CI 回归门禁上线。`dsh-ide-layout` / `dsh-lsp-core` 升至 1.1.0，`dsh-lsp-rust` 首发 0.1.0，python / typescript / powershell / java 不变（1.0.0）。
+
+### 新增
+
+- **dsh-lsp-rust 0.1.0**：Rust 语言插件（rust-analyzer 本机发现：`DSH_RUST_LS_HOME` → `~/.cargo/bin` → PATH，未找到降级纯高亮）——「新语言插件 = 编辑器零改动」首次兑现（layout 内置表早有 rs 高亮与展示名）。
+- **文件树搜索（资源管理器式）**：树顶搜索框输入即过滤（防抖），命中高亮、目录点击定位回树；host 递归遍历跳过 `node_modules`/`.git`，双上限防拖死，门禁复用。
+- **CI 回归门禁**：GitHub Actions（ubuntu，Node 22 + pnpm frozen lockfile）七包 build + 全量测试（125 项）。
+- `lspCapabilities.sessionLanguages()`：编辑器 LSP 状态订阅注册表驱动（新语言自动进列表）。
+
+### 修复
+
+- **JDTLS 等重型服务器 initialize 超时**（10s → 60s）：原超时引发重连风暴（JVM 抢 `-data` 工作区锁崩溃 + 占满桥连接上限连累其他语言卡「连接中」）。
+- **LSP 状态订阅硬编码四语言**：rust 状态栏永远「… LSP」（服务器实际已连）。
+- **Node（undici）WebSocket error 事件同步 close 重入爆栈**（CI ubuntu 复现，Windows 本地不触发）。
+
 ## [1.0.1] - 2026-08-22
 
 仅 `dsh-ide-layout` 升级（1.0.0 → 1.0.1），其余五包不变。

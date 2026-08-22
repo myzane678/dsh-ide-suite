@@ -1,13 +1,13 @@
 # dsh-ide-suite
 
 [![CI](https://github.com/myzane678/dsh-ide-suite/actions/workflows/ci.yml/badge.svg)](https://github.com/myzane678/dsh-ide-suite/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-1.0.1-blue)](https://github.com/myzane678/dsh-ide-suite/releases)
+[![Version](https://img.shields.io/badge/version-1.1.0-blue)](https://github.com/myzane678/dsh-ide-suite/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D22-green)](https://nodejs.org)
 [![pnpm](https://img.shields.io/badge/pnpm-%3E%3D11-orange)](https://pnpm.io)
-[![Tests](https://img.shields.io/badge/tests-124%20passed-brightgreen)](#开发)
+[![Tests](https://img.shields.io/badge/tests-125%20passed-brightgreen)](#开发)
 
-DSH（DeepSeek Harness）Web GUI 的 IDE 插件套件（monorepo，pnpm workspace）：**编辑器外壳 + LSP 基础设施 + 五语言插件**。v1.0.0——LSP 拆分工程完成，编辑器语言无关化：新增一种语言的 LSP 支持 = 新增一个插件，编辑器零改动。
+DSH（DeepSeek Harness）Web GUI 的 IDE 插件套件（monorepo，pnpm workspace）：**编辑器外壳 + LSP 基础设施 + 六语言插件**。v1.1.0——Rust 插件首发（0.1.0）+ 文件树资源管理器式搜索 + CI 回归门禁（125 项测试）。新增一种语言的 LSP 支持 = 新增一个插件，编辑器零改动。
 
 ## 功能特性
 
@@ -57,11 +57,12 @@ DSH（DeepSeek Harness）Web GUI 的 IDE 插件套件（monorepo，pnpm workspac
 // ~/.dsh/profiles/<profile>/package.json
 {
   "dependencies": {
-    "dsh-ide-layout": "github:myzane678/dsh-ide-suite#v1.0.1",
-    "dsh-lsp-core": "github:myzane678/dsh-ide-suite#v1.0.1",
-    "dsh-lsp-python": "github:myzane678/dsh-ide-suite#v1.0.1",
-    "dsh-lsp-typescript": "github:myzane678/dsh-ide-suite#v1.0.1",
-    "dsh-lsp-java": "github:myzane678/dsh-ide-suite#v1.0.1",
+    "dsh-ide-layout": "github:myzane678/dsh-ide-suite#v1.1.0",
+    "dsh-lsp-core": "github:myzane678/dsh-ide-suite#v1.1.0",
+    "dsh-lsp-python": "github:myzane678/dsh-ide-suite#v1.1.0",
+    "dsh-lsp-typescript": "github:myzane678/dsh-ide-suite#v1.1.0",
+    "dsh-lsp-java": "github:myzane678/dsh-ide-suite#v1.1.0",
+    "dsh-lsp-rust": "github:myzane678/dsh-ide-suite#v1.1.0",
     // PowerShell 插件用 Release 的 tgz 资产（vendor 不在 git 内）：
     "dsh-lsp-powershell": "https://github.com/myzane678/dsh-ide-suite/releases/download/v1.0.0/dsh-lsp-powershell-1.0.0.tgz"
   },
@@ -85,7 +86,7 @@ git clone https://github.com/myzane678/dsh-ide-suite.git
 cd dsh-ide-suite
 pnpm install                        # 一次安装全部包
 pnpm -r --filter "./*" run build    # 全量构建（dual-face：host esm + browser cjs）
-pnpm -r --filter "./*" test         # 全量测试（124 项）
+pnpm -r --filter "./*" test         # 全量测试（125 项）
 pnpm --filter dsh-lsp-core test     # 单包测试
 ```
 

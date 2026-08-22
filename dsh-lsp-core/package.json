@@ -1,6 +1,6 @@
 {
   "name": "dsh-lsp-core",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "DSH LSP 基础设施：client 语言注册表（语法包/扩展名）+ LanguageCapability（补全/诊断/签名/悬停/跳转/重命名/格式化/codeAction）+ host 语言服务器注册表与 LSP 桥。供 dsh-ide-layout 编辑器与各语言插件（dsh-lsp-python 等）协作。",
   "type": "module",
   "main": "lib/index.js",
