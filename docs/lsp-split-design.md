@@ -1,7 +1,8 @@
 # dsh-ide-layout LSP 拆分工程 — 阶段 0 设计文档
 
-> 日期：2026-08-21 · 状态：已确认方向（B 方案），机制验证完成，待大都督确认后进入阶段 1
+> 日期：2026-08-21 起 · **最终状态（2026-08-22）：工程完结**——阶段 0-3 全部完成并实测通过；v1.0.0 已发布（monorepo `dsh-ide-suite`，github.com/myzane678/dsh-ide-suite，六包全家桶，layout 全历史 subtree 保留）；v1.0.1 修复非 LSP 语言状态栏语言名退化（轻量语法注册表 `dsh-ide-layout/src/client/language-names.ts`，状态栏三级 fallback）。
 > 决策记录：编辑器留在外壳但**语言无关**；monorepo 组织；先 Python 垂直切片；四项驱动（按需安装 / 故障隔离 / 加语言方便 / 可维护性）
+> 本文为设计 + 分阶段执行全记录：正文各节保留当时状态，收尾结论见各节「已定案」标注。
 
 ## 1. 目标架构
 
@@ -182,11 +183,11 @@ dsh-lsp-python/
 | monorepo 影响现有 link 安装 | 阶段 1 先建 workspace 骨架并保持 layout 原位，验证 `pnpm install` + DSH 加载后再移动 |
 | LSP 请求时序/竞态（历史教训） | capability 层完整保留 lsp-client 的竞态处理（补全 id 只增不减等），迁移时逐行对照 |
 
-## 7. 待大都督确认
+## 7. 待大都督确认（已全部确认，2026-08-21）
 
-1. 本设计文档是否认可，是否进入阶段 1（monorepo 骨架 + Python 切片）
-2. 语法高亮包策略：非 LSP 语言（json/md/yaml 等 20 个）阶段 1 暂留 layout，后续再抽「语法包插件」——是否同意
-3. monorepo 根目录即 `E:\dsh-plugins`（现工作区）还是新建子目录（如 `E:\dsh-plugins\monorepo`）
+1. 本设计文档是否认可，是否进入阶段 1（monorepo 骨架 + Python 切片）——**已确认**，阶段 1-3 全部执行完毕
+2. 语法高亮包策略：非 LSP 语言（json/md/yaml 等 20 个）阶段 1 暂留 layout，后续再抽「语法包插件」——**已确认**（阶段 3 修订为永久策略：`@codemirror/*` 无法注入浏览器，高亮固定由 layout 内置表构造）
+3. monorepo 根目录即 `E:\dsh-plugins`（现工作区）还是新建子目录（如 `E:\dsh-plugins\monorepo`）——**已确认**：`E:\dsh-plugins\monorepo`
 
 ---
 
@@ -253,8 +254,8 @@ dsh-lsp-python/
 
 - **@codemirror/* 宿主单来源不可行**：宿主 `dsh-client-web` 的 `getStaticModules()` 是硬编码清单（react 系 + @deepseek-ai 系九个），浏览器 `__ModuleLoader__` 的 require 只查 seed/statics/factories 三表，任意 npm 包无法注入——语言插件**永不注册 syntax**，语法高亮固定由 dsh-ide-layout 内置表单副本构造（新语言要高亮需 layout 内置表支持；LSP 则完全插件化零改编辑器）。
 - **editor-bridge.ts 不迁移**：在单来源不可行的前提下，扩展对象必须由消费者 bundle 构造（双副本硬崩），lsp-core 反向接收全部 CodeMirror 构造器的「模块注入式」成本高收益低——**现状（layout 组装扩展 + lsp-core 提供 LSP 逻辑）即合理终态**。
-- **已完成**：`LspCapabilityService.languageFor(path)` 返回 `LanguageSummary { id, displayName, sessionId }`（纯查询无副作用）——EditorPane 的 lspFor/lspEnabled/状态栏语言名与 LSP 会话组指示全部改走它，`languageIdForPath`（core/types.ts）删除；lsp-client.ts **保留**（纯度门下 layout 侧的工具函数必要副本：纯函数双副本无害，value-import dsh-lsp-core 会 miss module table）。轻微展示变化：json/md 等非 LSP 语言状态栏语言名显示 plaintext（原显示 'json'/'markdown'）。
-- 待大都督拍板：各插件独立版本 / CHANGELOG / release 与 monorepo git 结构。
+- **已完成**：`LspCapabilityService.languageFor(path)` 返回 `LanguageSummary { id, displayName, sessionId }`（纯查询无副作用）——EditorPane 的 lspFor/lspEnabled/状态栏语言名与 LSP 会话组指示全部改走它，`languageIdForPath`（core/types.ts）删除；lsp-client.ts **保留**（纯度门下 layout 侧的工具函数必要副本：纯函数双副本无害，value-import dsh-lsp-core 会 miss module table）。轻微展示变化：json/md 等非 LSP 语言状态栏语言名显示 plaintext（原显示 'json'/'markdown'）——**v1.0.1 已修复**（轻量语法注册表 `language-names.ts`：扩展名 → 展示名，与内置语法表同步维护；状态栏三级 fallback：`lspCapabilities.languageFor` → `languageNameFor` → plaintext）。
+- ~~待大都督拍板：各插件独立版本 / CHANGELOG / release 与 monorepo git 结构。~~ **已定案（2026-08-22）**：单仓库多包 `dsh-ide-suite`（public），v1.0.0 六包齐发 + 全历史 tag 保留；更新日志结构：根 CHANGELOG.md（suite 级）+ 各子包 CHANGELOG，README 只引用。
 
 ### 阶段 1 实测清单（大都督重启 DSH 后）
 
