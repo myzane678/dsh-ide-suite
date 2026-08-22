@@ -1,12 +1,15 @@
 /** Left column: workspace file tree (dirs + files, lazy expand, click opens).
  *  v13: VS Code 风格右键菜单（在资源管理器中显示 / 复制路径 / 复制相对路径 /
  *  新建文件 / 新建文件夹 / 重命名 / 删除）+ 行内改名与新建输入 + 删除确认浮层。
+ *  v14: 资源管理器式搜索——标题栏下搜索框，输入即过滤（防抖 250ms），
+ *  host 递归遍历返回名称匹配项（跳过 node_modules/.git，上限 500 条）；
+ *  结果中文件点击打开、目录点击退出搜索并在树中展开定位；清空恢复树。
  *  目录数据由本组件缓存（LevelData map，参考 better-sidebar ExplorerView 模式），
  *  操作成功或收到 fs 变更（外层 SSE 重挂载）后重载。 */
 
 import { useCallback, useEffect, useRef, useState, type JSX, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { apiCreateDir, apiList, apiRemove, apiRename, apiReveal, apiWrite } from '../api.ts'
+import { apiCreateDir, apiList, apiRemove, apiRename, apiReveal, apiSearch, apiWrite } from '../api.ts'
 import type { FsEntry } from '../../core/types.ts'
 
 interface FileTreeProps {
@@ -37,6 +40,29 @@ interface MenuState {
   isDir: boolean
   x: number
   y: number
+}
+
+/** 搜索结果视图状态：null = 非搜索模式（输入为空，显示完整树）。 */
+interface SearchState {
+  loading: boolean
+  entries: FsEntry[]
+  truncated: boolean
+  error?: string
+}
+
+/** 名称命中子串高亮（资源管理器式：命中片段加背景）。 */
+function HighlightedName({ name, query }: { name: string; query: string }): JSX.Element {
+  const q = query.trim()
+  if (q === '') return <span>{name}</span>
+  const index = name.toLowerCase().indexOf(q.toLowerCase())
+  if (index === -1) return <span>{name}</span>
+  return (
+    <span>
+      {name.slice(0, index)}
+      <span style={{ background: 'rgba(250,204,21,0.5)', borderRadius: 2 }}>{name.slice(index, index + q.length)}</span>
+      {name.slice(index + q.length)}
+    </span>
+  )
 }
 
 type MenuItem = { id: string; label: string; danger?: boolean } | 'sep'
@@ -266,9 +292,13 @@ export function FileTree({ root, treeTick = 0, onOpenFile }: FileTreeProps): JSX
   const [editing, setEditing] = useState<EditState>(null)
   const [confirm, setConfirm] = useState<{ path: string; name: string; isDir: boolean } | null>(null)
   const [copied, setCopied] = useState<string | null>(null)
+  const [query, setQuery] = useState('')
+  const [searchState, setSearchState] = useState<SearchState | null>(null)
   const lastRoot = useRef('')
   /** P2-03：root 代际标记——切 root 后旧请求响应直接丢弃，防串树。 */
   const rootGen = useRef(0)
+  /** 搜索请求代际——输入再变或退出搜索时旧响应作废（与 rootGen 同模式）。 */
+  const searchGen = useRef(0)
 
   const storeLevel = useCallback((path: string, level: LevelData): void => {
     dataRef.current = { ...dataRef.current, [path]: level }
@@ -313,15 +343,46 @@ export function FileTree({ root, treeTick = 0, onOpenFile }: FileTreeProps): JSX
     if (lastRoot.current !== root) {
       lastRoot.current = root
       rootGen.current += 1
+      searchGen.current += 1
       dataRef.current = {}
       setData({})
       expandedRef.current = new Set()
       setExpanded(new Set())
+      // 换工作区：旧搜索词无意义，退出搜索模式。
+      setQuery('')
+      setSearchState(null)
       loadDir('')
       return
     }
     refresh()
   }, [root, refresh, treeTick, loadDir])
+
+  // 防抖搜索：输入停 250ms 后发起；清空即回树视图。请求期间保留旧结果
+  // （loading 只覆盖首行提示，不打断浏览）。
+  useEffect(() => {
+    const q = query.trim()
+    if (q === '') {
+      searchGen.current += 1
+      setSearchState(null)
+      return
+    }
+    setSearchState((prev) => ({ loading: true, entries: prev?.entries ?? [], truncated: false }))
+    const gen = ++searchGen.current
+    const timer = window.setTimeout(() => {
+      void apiSearch(root, q).then((result) => {
+        if (gen !== searchGen.current) return
+        if (result.ok) {
+          setSearchState({ loading: false, entries: result.value.entries, truncated: result.value.truncated === true })
+        } else {
+          setSearchState({ loading: false, entries: [], truncated: false, error: result.error.message })
+        }
+      }).catch((cause: unknown) => {
+        if (gen !== searchGen.current) return
+        setSearchState({ loading: false, entries: [], truncated: false, error: cause instanceof Error ? cause.message : String(cause) })
+      })
+    }, 250)
+    return () => { window.clearTimeout(timer) }
+  }, [query, root])
 
   const toggle = useCallback((path: string): void => {
     if (dataRef.current[path] === undefined) loadDir(path)
@@ -329,6 +390,24 @@ export function FileTree({ root, treeTick = 0, onOpenFile }: FileTreeProps): JSX
       const next = new Set(prev)
       if (next.has(path)) next.delete(path)
       else next.add(path)
+      expandedRef.current = next
+      return next
+    })
+  }, [loadDir])
+
+  /** 搜索结果点目录：退出搜索，在树中展开定位（逐层 loadDir + 展开祖先链）。 */
+  const revealDir = useCallback((rel: string): void => {
+    setQuery('')
+    const chain: string[] = []
+    let acc = ''
+    for (const part of rel.split('/')) {
+      acc = acc === '' ? part : `${acc}/${part}`
+      chain.push(acc)
+    }
+    for (const dir of chain) loadDir(dir)
+    setExpanded((prev) => {
+      const next = new Set(prev)
+      for (const dir of chain) next.add(dir)
       expandedRef.current = next
       return next
     })
@@ -437,9 +516,84 @@ export function FileTree({ root, treeTick = 0, onOpenFile }: FileTreeProps): JSX
       }}>
         {root === '' ? '工作区' : rootName}
       </div>
+      {/* 资源管理器式搜索框：输入即过滤（防抖），Esc / × 清空回树。 */}
+      {root !== '' && (
+        <div style={{
+          padding: '6px 8px',
+          flexShrink: 0,
+          borderBottom: '1px solid var(--ide-border, #e5e6eb)',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 4,
+        }}>
+          <input
+            value={query}
+            placeholder="搜索文件…"
+            onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={(event) => { if (event.key === 'Escape') setQuery('') }}
+            style={{
+              flex: 1,
+              minWidth: 0,
+              fontSize: 12,
+              padding: '3px 6px',
+              background: 'var(--dsw-alias-bg-base,#ffffff)',
+              color: 'inherit',
+              border: '1px solid var(--ide-border,#e5e6eb)',
+              borderRadius: 3,
+              outline: 'none',
+              fontFamily: 'inherit',
+            }}
+          />
+          {query !== '' && (
+            <button
+              type="button"
+              title="清除搜索"
+              onClick={() => setQuery('')}
+              style={{ border: 'none', background: 'transparent', color: 'var(--ide-muted,#6b7280)', cursor: 'pointer', fontSize: 13, padding: '0 4px', fontFamily: 'inherit', lineHeight: 1 }}
+            >
+              ×
+            </button>
+          )}
+        </div>
+      )}
       <div style={{ flex: 1, overflow: 'auto', padding: '4px 0' }}>
         {root === '' ? (
           <div style={{ padding: 12, color: '#9ca3af', fontSize: 13 }}>请先打开一个工作区会话</div>
+        ) : searchState !== null ? (
+          <div>
+            {searchState.loading && (
+              <div style={{ ...rowStyle(0), color: '#9ca3af', cursor: 'default' }}>搜索中…</div>
+            )}
+            {!searchState.loading && searchState.error !== undefined && (
+              <div style={{ ...rowStyle(0), color: '#dc2626', cursor: 'default' }}>⚠ {searchState.error}</div>
+            )}
+            {!searchState.loading && searchState.error === undefined && searchState.entries.length === 0 && (
+              <div style={{ ...rowStyle(0), color: '#9ca3af', fontStyle: 'italic', cursor: 'default' }}>无匹配「{query.trim()}」</div>
+            )}
+            {searchState.entries.map((entry) => {
+              const { dir: parentDir } = splitRel(entry.path)
+              return (
+                <div
+                  key={entry.path}
+                  style={rowStyle(0)}
+                  onClick={() => { if (entry.isDir) revealDir(entry.path); else onOpenFile(entry.path) }}
+                  onContextMenu={(event) => openMenu(event, entry.path, entry.isDir)}
+                  {...hoverHandlers()}
+                  title={entry.path}
+                >
+                  <span style={{ width: 14, display: 'inline-block' }} />
+                  <FileIcon entry={entry} />
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}><HighlightedName name={entry.name} query={query} /></span>
+                  {parentDir !== '' && (
+                    <span style={{ marginLeft: 'auto', paddingLeft: 8, color: '#9ca3af', fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', flexShrink: 1 }}>{parentDir}</span>
+                  )}
+                </div>
+              )
+            })}
+            {!searchState.loading && searchState.error === undefined && searchState.truncated && (
+              <div style={{ ...rowStyle(0), color: '#9ca3af', fontStyle: 'italic', cursor: 'default' }}>结果过多，仅显示前 {searchState.entries.length} 条</div>
+            )}
+          </div>
         ) : (
           <>
             <div

@@ -243,6 +243,12 @@ export function registerPanelRoutes(ctx: Context, fs: FsService): () => void {
         json(res, 'entries' in result ? OK(result) : FAIL(result))
         return
       }
+      case '/dsh-ide/search': {
+        const query = strField(payload, 'query') ?? ''
+        const result = await fs.search(root, query)
+        json(res, 'entries' in result ? OK(result) : FAIL(result))
+        return
+      }
       case '/dsh-ide/read': {
         const path = strField(payload, 'path')
         if (path === null) {

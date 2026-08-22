@@ -19,6 +19,12 @@ import { decodeText, encodeText } from './encoding.ts'
 const TEXT_CAP_CHARS = 500_000
 /** Directories never listed in the tree. */
 const TREE_SKIP_DIRS = new Set(['.git'])
+/** 搜索永不进入的目录（node_modules 体量巨大且非用户文件；.git 与树一致跳过）。 */
+export const SEARCH_SKIP_DIRS = new Set(['.git', 'node_modules'])
+/** 搜索结果上限（超过即截断并标记 truncated）。 */
+export const SEARCH_MAX_RESULTS = 500
+/** 搜索访问目录数上限（防超大仓库/深层嵌套把请求拖死）。 */
+export const SEARCH_MAX_DIRS = 20_000
 /** Polling fallback interval when recursive watch is unavailable. */
 const POLL_FALLBACK_MS = 3_000
 
@@ -329,6 +335,47 @@ export class FsService {
     } catch {
       return { code: 'write-failed', message: `cannot remove ${rel}` }
     }
+  }
+
+  /**
+   * 递归搜索工作区（资源管理器式名称过滤）：BFS 遍历授权根内全部目录，
+   * 返回名称包含 query（大小写不敏感）的文件与目录。防护栏：跳过
+   * SEARCH_SKIP_DIRS；结果达 SEARCH_MAX_RESULTS 或访问目录数达
+   * SEARCH_MAX_DIRS 即止（truncated 标记）。readdir withFileTypes 对
+   * symlink 目录的 isDirectory() 为 false——不跟随符号链接目录，天然防循环。
+   */
+  async search(root: string, query: string): Promise<DirListing | PanelError> {
+    const gated = await this.gate(root)
+    if (!gated.ok || gated.canonical === undefined) return gated.error ?? { code: 'forbidden', message: 'root not gated' }
+    const q = query.trim().toLowerCase()
+    if (q === '') return { root: gated.canonical, entries: [] }
+    const results: FsEntry[] = []
+    let truncated = false
+    const queue: Array<{ abs: string; rel: string }> = [{ abs: gated.canonical, rel: '' }]
+    let visitedDirs = 0
+    while (queue.length > 0 && results.length < SEARCH_MAX_RESULTS && visitedDirs < SEARCH_MAX_DIRS) {
+      const current = queue.shift()
+      if (current === undefined) break
+      visitedDirs += 1
+      let dirents: Dirent[]
+      try {
+        dirents = await readdir(current.abs, { withFileTypes: true })
+      } catch {
+        continue
+      }
+      for (const entry of dirents) {
+        const isDir = entry.isDirectory()
+        if (isDir && SEARCH_SKIP_DIRS.has(entry.name)) continue
+        const childRel = current.rel === '' ? entry.name : `${current.rel}/${entry.name}`
+        if (entry.name.toLowerCase().includes(q)) {
+          results.push({ name: entry.name, path: childRel, isDir, size: 0, mtime: 0 })
+          if (results.length >= SEARCH_MAX_RESULTS) { truncated = true; break }
+        }
+        if (isDir) queue.push({ abs: join(current.abs, entry.name), rel: childRel })
+      }
+    }
+    results.sort(compareEntries)
+    return { root: gated.canonical, entries: results, truncated }
   }
 
   /** Resolve a gated absolute path (for host-side shell actions like reveal). */

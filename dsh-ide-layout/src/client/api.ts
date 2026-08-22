@@ -29,6 +29,11 @@ export function apiList(root: string, path: string): Promise<Envelope<DirListing
   return post<DirListing>('/dsh-ide/list', { root, path })
 }
 
+/** 工作区搜索：名称包含 query 的文件与目录（资源管理器式过滤，host 递归遍历）。 */
+export function apiSearch(root: string, query: string): Promise<Envelope<DirListing>> {
+  return post<DirListing>('/dsh-ide/search', { root, query })
+}
+
 /** 按编码读取文本；encoding 缺省为 utf-8，'auto' 为自动检测。 */
 export function apiRead(root: string, path: string, encoding?: string): Promise<Envelope<FileRead>> {
   return post<FileRead>('/dsh-ide/read', { root, path, encoding })

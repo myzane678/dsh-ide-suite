@@ -2,6 +2,12 @@
 
 本项目版本与更新记录。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [Unreleased]
+
+### 新增
+
+- **文件树搜索（资源管理器式）**：树顶搜索框输入即过滤（防抖 250ms）——host 新增 `/dsh-ide/search`（`fs.search` 递归 BFS 遍历授权工作区，跳过 `node_modules`/`.git`，结果 500 条 / 目录 2 万双上限防拖死，workspace gate 门禁与 realpath 防护全程复用）；结果名称命中子串高亮，文件点击打开、目录点击退出搜索并在树中展开定位到该目录；清空 / Esc 恢复完整树。新增 `tests/fs-search.test.ts`（5 项）。
+
 ## [1.0.1] - 2026-08-22
 
 ### 修复

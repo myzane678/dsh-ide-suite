@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D22-green)](https://nodejs.org)
 [![pnpm](https://img.shields.io/badge/pnpm-%3E%3D11-orange)](https://pnpm.io)
-[![Tests](https://img.shields.io/badge/tests-119%20passed-brightgreen)](#开发)
+[![Tests](https://img.shields.io/badge/tests-124%20passed-brightgreen)](#开发)
 
 DSH（DeepSeek Harness）Web GUI 的 IDE 插件套件（monorepo，pnpm workspace）：**编辑器外壳 + LSP 基础设施 + 五语言插件**。v1.0.0——LSP 拆分工程完成，编辑器语言无关化：新增一种语言的 LSP 支持 = 新增一个插件，编辑器零改动。
 
@@ -19,7 +19,7 @@ DSH（DeepSeek Harness）Web GUI 的 IDE 插件套件（monorepo，pnpm workspac
 - 编码选择：UTF-8 / 自动检测 / GB18030 / GBK / Big5 / UTF-16 LE / ISO-8859-1——GBK 等中文旧文件不乱码，保存按所选编码写回
 - 图片预览（png/jpg/gif/webp/bmp/ico/avif，滚轮缩放）；Ctrl+滚轮字号缩放（9–24px 记忆）
 - GitLens 式行内 blame（gutter 逐行标注 + 悬停完整提交信息）
-- 工作区文件树（真实文件系统，fs 变更自动刷新）、xterm 终端、问题面板、Git 面板
+- 工作区文件树（真实文件系统，fs 变更自动刷新；**资源管理器式搜索**：输入即过滤、命中高亮、目录定位回树）、xterm 终端、问题面板、Git 面板
 
 ### LSP（语言插件决定）
 
@@ -85,7 +85,7 @@ git clone https://github.com/myzane678/dsh-ide-suite.git
 cd dsh-ide-suite
 pnpm install                        # 一次安装全部包
 pnpm -r --filter "./*" run build    # 全量构建（dual-face：host esm + browser cjs）
-pnpm -r --filter "./*" test         # 全量测试（119 项）
+pnpm -r --filter "./*" test         # 全量测试（124 项）
 pnpm --filter dsh-lsp-core test     # 单包测试
 ```
 

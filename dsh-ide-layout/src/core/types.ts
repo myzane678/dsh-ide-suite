@@ -13,6 +13,8 @@ export interface FsEntry {
 export interface DirListing {
   root: string
   entries: FsEntry[]
+  /** 搜索结果达上限被截断时为 true（文件树提示「仅显示前 N 条」）。 */
+  truncated?: boolean
 }
 
 export interface FileRead {
