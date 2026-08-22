@@ -28,6 +28,7 @@ DSH（DeepSeek Harness）Web GUI 的 IDE 布局插件：左侧工作区文件树
 - `dsh-lsp-python`：Python（pyright，宽松配置防第三方库误报）
 - `dsh-lsp-powershell`：PowerShell（PowerShell Editor Services，vendor 随插件分发）
 - `dsh-lsp-java`：Java（复用本机 Red Hat VS Code Java 扩展的 JDTLS，或 `DSH_JAVA_LS_HOME`；未找到时自动降级纯高亮）
+- `dsh-lsp-rust`：Rust（rust-analyzer，复用本机 rustup / `DSH_RUST_LS_HOME` / PATH；未找到时自动降级纯高亮）
 - dsh-lsp-core 的宿主桥为每条 WebSocket 连接启动一个语言服务器子进程（stdio ↔ WS 透传；连接上限 8、单帧 4MB、URI 门禁、workspace 门禁）
 - ⚠️ Electron 宿主必须设置 `ELECTRON_RUN_AS_NODE=1`
 - 终端 / LSP WebSocket 与 HTTP 路由同级校验：仅接受本机 loopback + 同源 Origin 的连接

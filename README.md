@@ -119,7 +119,7 @@ LSP 拆分工程的设计与分阶段记录：[docs/lsp-split-design.md](docs/ls
 
 ## 更新日志
 
-见 [CHANGELOG.md](CHANGELOG.md)——v0.1.0 → v1.0.1 逐版记录（v0.x 为 `dsh-ide-layout` 并入前历史）。各子包明细见其各自 CHANGELOG。
+见 [CHANGELOG.md](CHANGELOG.md)——v0.1.0 → v1.1.0 逐版记录（v0.x 为 `dsh-ide-layout` 并入前历史）。各子包明细见其各自 CHANGELOG。
 
 ## 跨插件协作约定（贡献必读）
 
