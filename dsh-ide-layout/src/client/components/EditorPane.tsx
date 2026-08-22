@@ -9,7 +9,7 @@ import { EditorView, GutterMarker, gutter, hoverTooltip, keymap, showTooltip, to
 import { Compartment, Prec, EditorState, StateEffect, StateField, type Extension, type Text } from '@codemirror/state'
 import { HighlightStyle, indentUnit, syntaxHighlighting } from '@codemirror/language'
 import { tags as t } from '@lezer/highlight'
-import { autocompletion, acceptCompletion, hasNextSnippetField, hasPrevSnippetField, nextSnippetField, prevSnippetField, snippet, startCompletion, type CompletionContext, type CompletionResult } from '@codemirror/autocomplete'
+import { autocompletion, acceptCompletion, completionStatus, hasNextSnippetField, hasPrevSnippetField, nextSnippetField, prevSnippetField, snippet, startCompletion, type CompletionContext, type CompletionResult } from '@codemirror/autocomplete'
 import { forceLinting, linter, type Diagnostic } from '@codemirror/lint'
 import { indentLess, indentMore } from '@codemirror/commands'
 import { javascript } from '@codemirror/lang-javascript'
@@ -228,6 +228,8 @@ interface CodeMirrorPaneProps {
   onSave: (tab: EditorTab) => void
   /** 编辑器内右键菜单回调（选中文本非空时触发）。 */
   onContextAction: (kind: 'ask-agent' | 'copy', text: string) => void
+  /** 右键「重启 LSP 连接」：销毁当前 root 全部会话并重新建立（界面状态不受影响）。 */
+  onRestartLsp?: () => void
   /** LSP 客户端（当前 root 一个，可为 null = 未启用）。统一 LanguageCapability 接口：
    *  旧 ts/ps/java 用 LspClient（已实现接口），Python 用 dsh-lsp-core 的 LspSession。 */
   lsp: LanguageCapability | null
@@ -358,7 +360,10 @@ const signatureTooltipField = StateField.define<Tooltip | null>({
     for (const effect of transaction.effects) {
       if (effect.is(signatureTooltipEffect)) return effect.value
     }
-    return transaction.docChanged || transaction.selection !== undefined ? null : value
+    // 补全框打开 → 隐藏签名框（互斥让位，等价 VS Code 的参数提示让位语义）。
+    // 括号内输入/移动不再直接隐藏（去闪烁）：由 updateListener 统一调度——
+    // 括号闭合时置 null，括号内输入则原位刷新内容，避免每次按键 tooltip 消失重弹。
+    return completionStatus(transaction.state) !== null ? null : value
   },
 })
 
@@ -716,7 +721,7 @@ function ImagePreview({ tab }: { tab: EditorTab }): JSX.Element {
 /** One CodeMirror instance per tab. The parent remounts this component via
  * `key={tab.id}` on tab switch; the view is created once on mount and
  * destroyed on unmount (non-controlled: doc flows out via updateListener). */
-function CodeMirrorPane({ tab, onContentChange, onSave, onContextAction, lsp, diagnostics, onOpenLocation, revealLine, onRevealDone, root, onCursor, fontSize, onFontSizeChange, blame, blameEnabled }: CodeMirrorPaneProps): JSX.Element {
+function CodeMirrorPane({ tab, onContentChange, onSave, onContextAction, onRestartLsp, lsp, diagnostics, onOpenLocation, revealLine, onRevealDone, root, onCursor, fontSize, onFontSizeChange, blame, blameEnabled }: CodeMirrorPaneProps): JSX.Element {
   const hostRef = useRef<HTMLDivElement | null>(null)
   const viewRef = useRef<EditorView | null>(null)
   const signatureRequestRef = useRef(0)
@@ -919,6 +924,13 @@ function CodeMirrorPane({ tab, onContentChange, onSave, onContextAction, lsp, di
           override: [(context: CompletionContext): Promise<CompletionResult | null> | null => {
             const client = propsRef.current.lsp
             if (client === null) return null
+            // 补全门控（对齐 VS Code 触发字符语义）：非显式触发（Ctrl+Space）时，只有
+            // 光标前是标识符字符或成员访问点（.）才自动弹补全；敲完括号、逗号、空格等
+            // 标点后不再弹候选（此时应显示签名框），source 返回 null 让 CodeMirror 收起补全。
+            if (!context.explicit) {
+              const before = context.state.doc.sliceString(Math.max(0, context.pos - 1), context.pos)
+              if (before !== '' && !/[\w$]/.test(before) && before !== '.') return null
+            }
             const path = propsRef.current.tab.path
             const position: LspPosition = {
               line: context.state.doc.lineAt(context.pos).number - 1,
@@ -967,29 +979,39 @@ function CodeMirrorPane({ tab, onContentChange, onSave, onContextAction, lsp, di
         // publishDiagnostics 后 setState → 本组件重渲染 → forceLinting 刷新）。
         ...(lspEnabled ? [linter((view) => propsRef.current.diagnostics.map((d) => toCmDiagnostic(view.state.doc, d)))] : []),
         EditorView.updateListener.of((update) => {
-          if (update.selectionSet || update.docChanged) {
-            const head = update.state.selection.main.head
-            // 注意：这里不能再递增 completionRequestRef —— autocompletion 扩展先于
-            // 本 updateListener 触发补全 source，递增会把刚发出的请求作废（补全全消失）。
-            const requestId = ++signatureRequestRef.current
-            const shouldShow = shouldRequestSignature(update.state.doc, head)
-            if (!shouldShow || propsRef.current.lsp === null) {
-              update.view.dispatch({ effects: signatureTooltipEffect.of(null) })
-            } else {
-              const line = update.state.doc.lineAt(head)
-              const position: LspPosition = { line: line.number - 1, character: head - line.from }
-              const path = propsRef.current.tab.path
-              void propsRef.current.lsp.signatureHelp(path, position).then((help) => {
-                if (requestId !== signatureRequestRef.current || help === null || help.signatures.length === 0) return
-                update.view.dispatch({ effects: signatureTooltipEffect.of({
-                  pos: head,
-                  above: false,
-                  strictSide: false,
-                  arrow: true,
-                  create: () => ({ dom: renderSignatureDom(help) }),
-                }) })
-              })
-            }
+          // 注意：本监听器内不能递增 completionRequestRef —— autocompletion 扩展先于
+          // 本监听器触发补全 source，递增会把刚发出的请求作废（补全全消失）；补全代际
+          // 只在 source 内部（completionRequestRef）管理。
+          // 签名框调度（任何 update 都执行，含补全框开/关、光标移动、输入）：
+          // 互斥——补全框打开时隐藏签名框（等价 VS Code 的参数提示让位）；
+          // 去闪烁——括号内输入/移动不置 null，改为原位刷新签名内容。
+          const signatureHead = update.state.selection.main.head
+          const signatureInParens = shouldRequestSignature(update.state.doc, signatureHead)
+          const completionsOpen = completionStatus(update.state) !== null
+          const signatureShown = update.state.field(signatureTooltipField) !== null
+          const lsp = propsRef.current.lsp
+          if (!signatureInParens || completionsOpen || lsp === null) {
+            // 括号闭合 / 补全框打开 / 无 LSP → 隐藏签名框（已在隐藏态则不动，防循环）。
+            if (signatureShown) update.view.dispatch({ effects: signatureTooltipEffect.of(null) })
+          } else if (!signatureShown || update.docChanged || update.selectionSet) {
+            // 需要显示：补全框刚收起 / 刚敲括号（当前无签名框）→ 请求；
+            // 或括号内输入/移动 → 刷新签名内容（tooltip 不消失，原位更新，无闪烁）。
+            const signatureRequestId = ++signatureRequestRef.current
+            const line = update.state.doc.lineAt(signatureHead)
+            const position: LspPosition = { line: line.number - 1, character: signatureHead - line.from }
+            const path = propsRef.current.tab.path
+            void lsp.signatureHelp(path, position).then((help) => {
+              if (signatureRequestId !== signatureRequestRef.current || help === null || help.signatures.length === 0) return
+              // 响应回来时补全框已打开 → 不显示（互斥，避免两框叠在一起）。
+              if (completionStatus(update.view.state) !== null) return
+              update.view.dispatch({ effects: signatureTooltipEffect.of({
+                pos: signatureHead,
+                above: false,
+                strictSide: false,
+                arrow: true,
+                create: () => ({ dom: renderSignatureDom(help) }),
+              }) })
+            })
           }
           if (update.docChanged) {
             const content = update.state.doc.toString()
@@ -1170,6 +1192,18 @@ function CodeMirrorPane({ tab, onContentChange, onSave, onContextAction, lsp, di
           >
             🎨 格式化文档 (Shift+Alt+F)
           </MenuItemButton>
+          {propsRef.current.lsp !== null && (
+            <MenuItemButton
+              onClick={() => {
+                const m = menu
+                setMenu(null)
+                if (m === null) return
+                onRestartLsp?.()
+              }}
+            >
+              🔄 重启 LSP 连接
+            </MenuItemButton>
+          )}
           <div style={{ height: 1, margin: '4px 8px', background: 'var(--ide-border,#e5e6eb)' }} />
           {menu.text.trim() !== '' && (
             <MenuItemButton
@@ -1424,6 +1458,10 @@ export function EditorPane({
       return next
     })
   }
+  // 右键「重启 LSP」触发源：+1 让 LSP 订阅 useEffect 重跑（cleanup disposeRoot
+  // 销毁当前 root 全部会话，effect 重新 acquire + connect）。声明在 useEffect
+  // 之前（依赖数组引用）；restartLsp 回调本体在 saveTimer 之后。
+  const [lspTick, setLspTick] = useState(0)
 
   // 拉取当前文件 blame：root / 文件 / 保存后 变化时重取。编辑中（dirty）不清
   // 除则行号会与 blame 错位，由 onContentChange 处理（见 handleContentChange）。
@@ -1498,7 +1536,9 @@ export function EditorPane({
       for (const dispose of disposers) dispose()
       lspCapabilities.disposeRoot(root)
     }
-  }, [root, lspCapabilities])
+    // lspTick：右键「重启 LSP」时重跑——cleanup 先 disposeRoot 销毁旧会话，
+    // effect 重新 acquire 各会话组（新 WebSocket + 宿主重新 spawn 服务器进程）。
+  }, [root, lspCapabilities, lspTick])
 
   /** 跳转定义：LSP 返回的 uri（file:///...）→ 相对 root 路径 + 行号。
    *  目标文件已打开则直接定位；未打开则走 mount 层的 openFile。 */
@@ -1522,6 +1562,17 @@ export function EditorPane({
 
   const saveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   useEffect(() => () => { if (saveTimer.current !== undefined) clearTimeout(saveTimer.current) }, [])
+
+  // 右键「重启 LSP」：lspTick +1 → 上方 LSP 订阅 useEffect 重跑（cleanup 的
+  // disposeRoot 销毁当前 root 全部会话，effect 按会话组重新 acquire + connect）。
+  // 仅重建语言服务器连接，编辑器/终端/面板状态不受影响；状态栏经订阅自动
+  // 回「连接中…」→「已连接」。
+  const restartLsp = (): void => {
+    setLspTick((tick) => tick + 1)
+    setStatus('正在重启 LSP 连接…')
+    if (saveTimer.current !== undefined) clearTimeout(saveTimer.current)
+    saveTimer.current = setTimeout(() => setStatus(''), 3000)
+  }
 
   /** 保存并返回是否成功（供「运行前保存」与 Ctrl+S 共用）。 */
   const saveNow = async (tab: EditorTab): Promise<boolean> => {
@@ -1763,6 +1814,7 @@ export function EditorPane({
             }}
             onSave={(tab) => requestSave(tab)}
             lsp={lspFor(activeTab.path)}
+            onRestartLsp={restartLsp}
             diagnostics={diagMap.get(normalizeUri(pathToUri(root, activeTab.path))) ?? []}
             onOpenLocation={onOpenLocation}
             revealLine={revealTarget !== null && revealTarget.path === activeTab.path ? revealTarget.line : null}
