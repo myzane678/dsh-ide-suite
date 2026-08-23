@@ -2,6 +2,12 @@
 
 本项目版本与更新记录。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [1.4.1] - 2026-08-23
+
+### 修复
+
+- **外部 git 操作后面板/角标不刷新**：host watcher 不再整体抑制 `.git` 目录事件——`isIgnoredWatchPath` 放开 `.git`，新增 `isIgnoredDotGitPath` 只过滤高频噪声（`objects/**`、各类 `index.lock`、watchman cookie），保留 `HEAD`/`refs/**`/`index`/`ORIG_HEAD` 等关键变化。命令行（或外部工具）commit / checkout / push / pull 后，Git 面板与未提交角标自动刷新（对齐 VS Code DotGitWatcher；host 改动需重启 DSH 生效）。
+
 ## [1.4.0] - 2026-08-23
 
 ### 新增

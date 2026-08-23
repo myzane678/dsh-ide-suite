@@ -95,17 +95,41 @@ function isPathInside(root: string, target: string): boolean {
 
 /** True when the changed path lives inside a noise directory (watch noise).
  *  node_modules/.git 之外，DSH 数据目录（sessions/logs/attachments）与任何
- *  隐藏目录（. 开头）变化频繁且用户基本不关心——只影响「变更事件」，不影响文件树显示。 */
+ *  隐藏目录（. 开头）变化频繁且用户基本不关心——只影响「变更事件」，不影响文件树显示。
+ *  `.git` 不再整体抑制：外部 git 操作（命令行 commit/checkout/push）只改 .git，
+ *  必须触发刷新（对齐 VS Code DotGitWatcher），高频噪声由 isIgnoredDotGitPath 单独过滤。 */
 function isIgnoredWatchPath(filename: string): boolean {
+  if (isIgnoredDotGitPath(filename)) return true
   return filename.split(/[\\/]/).some((part) => {
     const candidate = process.platform === 'win32' ? part.toLowerCase() : part
     return candidate === 'node_modules'
-      || candidate === '.git'
       || candidate === 'sessions'
       || candidate === 'logs'
       || candidate === 'attachments'
-      || (candidate.startsWith('.') && candidate !== '.' && candidate !== '..')
+      || (candidate.startsWith('.') && candidate !== '.' && candidate !== '..' && candidate !== '.git')
   })
+}
+
+/** True when the changed path is a .git path that only produces noise.
+ *  抑制：objects/（每次 git 命令都写对象，含只读操作）与各类 index.lock
+ *  （git 命令运行期间的锁，瞬时存在）、watchman cookie。其余 .git 变化
+ *  （HEAD / refs/** / index / ORIG_HEAD 等）保留——外部提交/切分支/推送
+ *  就靠它们触发自动刷新。 */
+function isIgnoredDotGitPath(filename: string): boolean {
+  const parts = filename.split(/[\\/]/)
+  const dotGitIndex = parts.findIndex((part) => {
+    const candidate = process.platform === 'win32' ? part.toLowerCase() : part
+    return candidate === '.git'
+  })
+  if (dotGitIndex === -1) return false
+  const rest = parts.slice(dotGitIndex + 1)
+  if (rest.length === 0) return false
+  const first = rest[0]!.toLowerCase()
+  if (first === 'objects') return true
+  if (first === 'index.lock') return true
+  if (first === 'worktrees') return rest.some((part) => part.toLowerCase().endsWith('index.lock'))
+  if (first.startsWith('.watchman-cookie-')) return true
+  return rest.some((part) => part.toLowerCase() === 'index.lock')
 }
 
 /** The fs.watch call shape the service needs (constructor seam for tests). */

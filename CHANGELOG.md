@@ -4,6 +4,20 @@ dsh-ide-suite（monorepo）版本与更新记录，跟随仓库 tag（v0.1.0 起
 
 v0.x 为 `dsh-ide-layout` 单包时代历史（全历史随 subtree 合入保留）；各子包完整明细见其各自 CHANGELOG：[layout](dsh-ide-layout/CHANGELOG.md) · [core](dsh-lsp-core/CHANGELOG.md) · [python](dsh-lsp-python/CHANGELOG.md) · [typescript](dsh-lsp-typescript/CHANGELOG.md) · [powershell](dsh-lsp-powershell/CHANGELOG.md) · [java](dsh-lsp-java/CHANGELOG.md)。
 
+## [1.4.1] - 2026-08-23
+
+修复：外部 git 操作（命令行/外部工具 commit、checkout、push、pull）后 Git 面板与未提交角标不刷新。仅 `dsh-ide-layout` 升级（1.4.0 → 1.4.1），其余六包不变。
+
+### 修复
+
+- host watcher 不再整体抑制 `.git` 目录事件：`isIgnoredWatchPath` 放开 `.git`，新增 `isIgnoredDotGitPath` 只过滤高频噪声（`objects/**`、各类 `index.lock`、watchman cookie），保留 `HEAD`/`refs/**`/`index`/`ORIG_HEAD` 等关键变化——命令行 commit/checkout/push 后自动触发 gitTick 刷新（对齐 VS Code DotGitWatcher）。
+
+### 版本
+
+dsh-ide-layout 1.4.0 → 1.4.1；dsh-lsp-core / python / typescript / powershell / java / rust 不变。
+
+> dsh-lsp-powershell 的 vendor tgz 资产无变化，仍使用 v1.0.0 提供的 dsh-lsp-powershell-1.0.0.tgz。
+
 ## [1.4.0] - 2026-08-23
 
 Git 面板事件驱动自动刷新（对齐 VS Code）+ 未提交变更角标 + diff 收起修复。仅 `dsh-ide-layout` 升级（1.3.0 → 1.4.0），其余六包不变。
