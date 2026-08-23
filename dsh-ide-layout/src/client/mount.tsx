@@ -12,11 +12,28 @@ import { EditorPane } from './components/EditorPane.tsx'
 import { GitPanel } from './components/GitPanel.tsx'
 import { ProblemsPanel } from './components/ProblemsPanel.tsx'
 import { BuildOutputDialog } from './components/BuildOutputDialog.tsx'
-import { apiBuild } from './api.ts'
+import { apiBuild, apiGitRepos, apiGitStatus } from './api.ts'
 import type { BuildResult, BuildTaskName } from './api.ts'
 
 const WORKBENCH_SELECTOR = '[data-ide-workbench]'
 const SIDEBAR_TREE_SELECTOR = '[data-ide-sidebar-tree]'
+
+/**
+ * 统计工作区未提交变更总数（Git 按钮角标）：
+ * root 本身是仓库 → 直接用 status；否则汇总所有发现的嵌套仓库（多仓库工作区
+ * 如 E:\dsh-plugins 下各插件仓库），任一仓库有改动角标都能反映。失败返回 0。
+ */
+async function countGitChanges(root: string): Promise<number> {
+  const statusResult = await apiGitStatus(root)
+  if (statusResult.ok && statusResult.value.isRepo) return statusResult.value.entries.length
+  const reposResult = await apiGitRepos(root)
+  if (!reposResult.ok) return 0
+  const counts = await Promise.all(reposResult.value.map(async (repo) => {
+    const result = await apiGitStatus(repo.path)
+    return result.ok && result.value.isRepo ? result.value.entries.length : 0
+  }))
+  return counts.reduce((total, count) => total + count, 0)
+}
 
 /**
  * Wait for one selector (the shell/frame mounts after boot settlement), then
@@ -88,6 +105,27 @@ function SidebarTree({ api }: { api: IdeMountApi }): JSX.Element {
   const buildRootRef = useRef('')
   // 诊断计数角标：聚合所有打开文件的 LSP 诊断（错误+警告）。
   const problemCount = Object.values(state.diagnostics).reduce((total, list) => total + list.length, 0)
+  // Git 未提交变更计数角标：fs 事件（gitTick）驱动，防抖后统计（任何视图下常驻，
+  // 不依赖 Git 面板挂载）。600ms 防抖对齐文件树刷新节奏，避免保存风暴打爆 git status。
+  const [gitCount, setGitCount] = useState(0)
+  const gitCountTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  /** 计数归属的工作区根：切换 root 后旧响应丢弃，防串角标。 */
+  const gitCountRootRef = useRef('')
+  useEffect(() => {
+    if (state.root === '') return
+    if (gitCountTimer.current !== undefined) clearTimeout(gitCountTimer.current)
+    const root = state.root
+    gitCountRootRef.current = root
+    gitCountTimer.current = setTimeout(() => {
+      gitCountTimer.current = undefined
+      void countGitChanges(root).then((count) => {
+        if (gitCountRootRef.current === root) setGitCount(count)
+      })
+    }, 600)
+  }, [state.root, state.gitTick])
+  useEffect(() => () => {
+    if (gitCountTimer.current !== undefined) clearTimeout(gitCountTimer.current)
+  }, [])
   const viewTitle = view === 'files' ? '资源管理器' : view === 'git' ? '源代码管理' : '问题'
   const toggle = (key: 'git' | 'problems'): void => setView((prev) => (prev === key ? 'files' : key))
   /** 带文字的紧凑切换按钮：比纯图标明显，又不回到三个等宽 tab。 */
@@ -180,10 +218,19 @@ function SidebarTree({ api }: { api: IdeMountApi }): JSX.Element {
         <button
           type="button"
           onClick={() => toggle('git')}
-          title="Git 面板"
+          title={gitCount > 0 ? `Git 面板（${gitCount} 个未提交变更）` : 'Git 面板'}
           style={viewButton(view === 'git')}
         >
           🛠 Git
+          {gitCount > 0 && (
+            <span style={{
+              minWidth: 14, height: 14, padding: '0 3px',
+              background: '#4f8cff', color: '#fff', fontSize: 9, lineHeight: '14px', textAlign: 'center',
+              borderRadius: 8, boxSizing: 'border-box',
+            }}>
+              {gitCount > 99 ? '99+' : gitCount}
+            </span>
+          )}
         </button>
       </div>
       <div style={{ flex: 1, minHeight: 0 }}>
@@ -196,7 +243,7 @@ function SidebarTree({ api }: { api: IdeMountApi }): JSX.Element {
             onRunProject={() => startBuild('run')}
           />
         )}
-        {view === 'git' && <GitPanel root={state.root} />}
+        {view === 'git' && <GitPanel root={state.root} gitTick={state.gitTick} />}
         {view === 'problems' && (
           <ProblemsPanel root={state.root} diagnostics={state.diagnostics} onOpenFile={api.openFile} />
         )}

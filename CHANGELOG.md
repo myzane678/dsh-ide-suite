@@ -4,6 +4,25 @@ dsh-ide-suite（monorepo）版本与更新记录，跟随仓库 tag（v0.1.0 起
 
 v0.x 为 `dsh-ide-layout` 单包时代历史（全历史随 subtree 合入保留）；各子包完整明细见其各自 CHANGELOG：[layout](dsh-ide-layout/CHANGELOG.md) · [core](dsh-lsp-core/CHANGELOG.md) · [python](dsh-lsp-python/CHANGELOG.md) · [typescript](dsh-lsp-typescript/CHANGELOG.md) · [powershell](dsh-lsp-powershell/CHANGELOG.md) · [java](dsh-lsp-java/CHANGELOG.md)。
 
+## [1.4.0] - 2026-08-23
+
+Git 面板事件驱动自动刷新（对齐 VS Code）+ 未提交变更角标 + diff 收起修复。仅 `dsh-ide-layout` 升级（1.3.0 → 1.4.0），其余六包不变。
+
+### 新增
+
+- **Git 面板事件驱动自动刷新**：host 递归 fs.watch → SSE → `gitTick` 计数器（与文件树 `treeTick` 同源）→ GitPanel 收到后 1s 防抖 + 5s 冷却自动重刷 `git status`——改了 git 库内容面板自动提示，无需手动点 ⟳；写操作进行中跳过（防抢 index 锁）。
+- **Git 未提交变更角标**：侧边栏「🛠 Git」按钮蓝底白字角标（汇总所有嵌套仓库变更总数，>99 显示 99+）；Git 面板仓库下拉框每个仓库选项显示各自未提交数（`name（main）· N`）。
+
+### 修复
+
+- Git 面板 diff 展开无法收起：`viewDiff` 补 toggle，再点同一行即收起。
+
+### 版本
+
+dsh-ide-layout 1.3.0 → 1.4.0；dsh-lsp-core / python / typescript / powershell / java / rust 不变。
+
+> dsh-lsp-powershell 的 vendor tgz 资产无变化，仍使用 v1.0.0 提供的 dsh-lsp-powershell-1.0.0.tgz。
+
 ## [1.3.0] - 2026-08-23
 
 Java 工具链 A 方案（构建/运行项目）+ 对话消息导航条（复刻网页版 ScrollNav）。仅 `dsh-ide-layout` 升级（1.2.0 → 1.3.0），其余六包不变。

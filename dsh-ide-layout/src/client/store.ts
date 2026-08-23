@@ -52,6 +52,9 @@ export interface IdeState {
   editorVisible: boolean
   /** 文件树刷新计数器：fs 变更时 +1，FileTree 收到后轻量重载（不重挂载组件）。 */
   treeTick: number
+  /** Git 面板刷新计数器：与 treeTick 同源（fs 变更 +1），GitPanel 收到后
+   *  自行防抖节流自动刷新 status（对齐 VS Code 事件驱动思路）。 */
+  gitTick: number
   /** LSP 诊断缓存：key = 归一化 file:// uri，value = 最新诊断列表。
    *  由 EditorPane 上抛写入（问题面板 ProblemsPanel 读取）。 */
   diagnostics: Record<string, LspDiagnostic[]>
@@ -64,6 +67,7 @@ export const IDE_DEFAULT: IdeState = {
   activeTabId: null,
   editorVisible: false,
   treeTick: 0,
+  gitTick: 0,
   diagnostics: {},
 }
 

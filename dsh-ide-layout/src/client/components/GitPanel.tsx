@@ -21,7 +21,16 @@ import {
 
 interface GitPanelProps {
   root: string
+  /** fs 变更计数器：宿主 fs 事件驱动自动刷新（对齐 VS Code 思路），每次变更 +1。 */
+  gitTick: number
 }
+
+/**
+ * 自动刷新的防抖与冷却（对齐 VS Code 内置 Git：debounce 1s 合并保存风暴，
+ * 刷新后 5s 冷却防止高频事件打爆 git status）。
+ */
+const AUTO_REFRESH_DEBOUNCE_MS = 1_000
+const AUTO_REFRESH_COOLDOWN_MS = 5_000
 
 const buttonStyle = (disabled = false): React.CSSProperties => ({
   padding: '2px 8px',
@@ -68,7 +77,7 @@ function DiffText({ text }: { text: string }): JSX.Element {
   )
 }
 
-export function GitPanel({ root }: GitPanelProps): JSX.Element {
+export function GitPanel({ root, gitTick }: GitPanelProps): JSX.Element {
   const [status, setStatus] = useState<GitStatusResult | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [message, setMessage] = useState('')
@@ -82,6 +91,16 @@ export function GitPanel({ root }: GitPanelProps): JSX.Element {
   const [repos, setRepos] = useState<GitRepoInfo[]>([])
   /** Currently targeted repo root ('' = workspace root). */
   const [activeRepo, setActiveRepo] = useState('')
+  /** 各仓库未提交变更数（仓库下拉框选项角标）：key = repo.path。 */
+  const [repoCounts, setRepoCounts] = useState<Record<string, number>>({})
+  /** repos 的 ref 镜像：refreshRepoCounts 在异步回调里读最新列表。 */
+  const reposRef = useRef<GitRepoInfo[]>([])
+  /** 自动刷新状态：上次刷新的时间戳 + 挂起的防抖 timer（卸载时清理）。 */
+  const lastAutoRefresh = useRef(0)
+  const autoRefreshTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  /** busy 的 ref 镜像：自动刷新在 timer 里执行，闭包拿不到最新 busy。 */
+  const busyRef = useRef(false)
+  useEffect(() => { busyRef.current = busy }, [busy])
 
   // The repo path every git call runs against: the selected nested repo, or
   // the workspace root when none was picked.
@@ -118,9 +137,12 @@ export function GitPanel({ root }: GitPanelProps): JSX.Element {
           void apiGitRepos(root).then((reposResult) => {
             if (gen !== repoGen.current) return
             if (reposResult.ok && reposResult.value.length > 0) {
+              reposRef.current = reposResult.value
               setRepos(reposResult.value)
               pickRepo(reposResult.value[0]!.path)
+              refreshRepoCounts()
             } else {
+              reposRef.current = []
               setRepos([])
             }
           })
@@ -131,6 +153,23 @@ export function GitPanel({ root }: GitPanelProps): JSX.Element {
     })
   }, [root])
 
+  /** 刷新所有仓库的未提交变更数（下拉框选项角标）；无嵌套仓库时跳过。
+   *  repoGen 代际保护：切换仓库/root 后旧响应丢弃。 */
+  const refreshRepoCounts = useCallback((): void => {
+    const list = reposRef.current
+    if (list.length === 0) return
+    const gen = repoGen.current
+    void Promise.all(list.map(async (repo) => {
+      const result = await apiGitStatus(repo.path)
+      return result.ok && result.value.isRepo ? result.value.entries.length : 0
+    })).then((counts) => {
+      if (gen !== repoGen.current) return
+      const next: Record<string, number> = {}
+      list.forEach((repo, index) => { next[repo.path] = counts[index] ?? 0 })
+      setRepoCounts(next)
+    })
+  }, [])
+
   useEffect(() => {
     setStatus(null)
     setDiff(null)
@@ -138,6 +177,8 @@ export function GitPanel({ root }: GitPanelProps): JSX.Element {
     setShowLog(false)
     setCommitDiff(null)
     setRepos([])
+    reposRef.current = []
+    setRepoCounts({})
     activeRepoRef.current = ''
     repoGen.current += 1
     setActiveRepo('')
@@ -149,6 +190,31 @@ export function GitPanel({ root }: GitPanelProps): JSX.Element {
     if (activeRepo !== '' && activeRepo !== root) refresh()
   }, [activeRepo, root, refresh])
 
+  // P4-01：fs 事件驱动自动刷新（对齐 VS Code 内置 Git）。
+  // gitTick 变化 → 1s 防抖合并保存风暴 → 5s 冷却内不再自动刷；
+  // 操作进行中（stage/commit 等）跳过，避免与写操作抢 git index 锁。
+  const gitTickRef = useRef(0)
+  useEffect(() => {
+    if (gitTick === gitTickRef.current) return
+    gitTickRef.current = gitTick
+    if (gitTick === 0 || root === '') return
+    if (autoRefreshTimer.current !== undefined) clearTimeout(autoRefreshTimer.current)
+    autoRefreshTimer.current = setTimeout(() => {
+      autoRefreshTimer.current = undefined
+      if (busyRef.current) return
+      const now = Date.now()
+      if (now - lastAutoRefresh.current < AUTO_REFRESH_COOLDOWN_MS) return
+      lastAutoRefresh.current = now
+      refresh()
+      refreshRepoCounts()
+    }, AUTO_REFRESH_DEBOUNCE_MS)
+  }, [gitTick, root, refresh])
+
+  // 卸载时清理挂起的自动刷新 timer。
+  useEffect(() => () => {
+    if (autoRefreshTimer.current !== undefined) clearTimeout(autoRefreshTimer.current)
+  }, [])
+
   /** 跑一个 git 操作，完成后刷新状态。 */
   const run = async (label: string, fn: () => Promise<boolean>): Promise<void> => {
     if (busy) return
@@ -159,6 +225,7 @@ export function GitPanel({ root }: GitPanelProps): JSX.Element {
         flash(label)
         setDiff(null)
         refresh()
+        refreshRepoCounts()
       } else {
         setError('git 操作失败')
       }
@@ -169,6 +236,11 @@ export function GitPanel({ root }: GitPanelProps): JSX.Element {
   }
 
   const viewDiff = (path: string, staged: boolean): void => {
+    // 再次点击已打开的行 → 收起 diff（toggle），不再重复请求。
+    if (diff !== null && diff.path === path && diff.staged === staged) {
+      setDiff(null)
+      return
+    }
     const gen = repoGen.current
     void apiGitDiff(gitRoot, path, staged).then((result) => {
       if (gen !== repoGen.current) return
@@ -226,9 +298,17 @@ export function GitPanel({ root }: GitPanelProps): JSX.Element {
             }}
             title={repos.find((repo) => repo.path === gitRoot)?.name ?? '选择 Git 仓库'}
           >
-            {repos.map((repo) => (
-              <option key={repo.path} value={repo.path}>{repo.name}（{repo.branch}）</option>
-            ))}
+            {repos.map((repo) => {
+              // 当前选中的仓库直接取最新 status；其他仓库用 repoCounts（自动刷新时同步）。
+              const count = repo.path === gitRoot && status !== null
+                ? status.entries.length
+                : (repoCounts[repo.path] ?? 0)
+              return (
+                <option key={repo.path} value={repo.path}>
+                  {repo.name}（{repo.branch}）{count > 0 ? ` · ${count}` : ''}
+                </option>
+              )
+            })}
           </select>
         )}
         <span style={{ marginLeft: 'auto', flexShrink: 0, display: 'flex', gap: 6 }}>

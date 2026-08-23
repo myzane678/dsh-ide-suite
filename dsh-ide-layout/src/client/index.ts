@@ -36,12 +36,13 @@ export function apply(ctx: ClientContext): void {
     let treeRefreshTimer: ReturnType<typeof setTimeout> | undefined
     /** Force the FileTree to re-list (fs changed on disk).
      *  轻量方案：bump treeTick → FileTree 保留展开状态重载数据；
-     *  不重挂载 panels（旧方案每次 fs 变更都重建文件树/编辑器/终端 → 闪烁）。 */
+     *  不重挂载 panels（旧方案每次 fs 变更都重建文件树/编辑器/终端 → 闪烁）。
+     *  同时 bump gitTick → GitPanel 防抖节流后自动刷新 status（事件驱动，对齐 VS Code）。 */
     const refreshTree = (): void => {
       if (treeRefreshTimer !== undefined) return
       treeRefreshTimer = setTimeout(() => {
         treeRefreshTimer = undefined
-        ide.update((prev) => ({ ...prev, treeTick: prev.treeTick + 1 }))
+        ide.update((prev) => ({ ...prev, treeTick: prev.treeTick + 1, gitTick: prev.gitTick + 1 }))
       }, 400)
     }
 

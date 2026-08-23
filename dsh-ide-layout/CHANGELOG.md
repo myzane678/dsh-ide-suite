@@ -2,6 +2,21 @@
 
 本项目版本与更新记录。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [1.4.0] - 2026-08-23
+
+### 新增
+
+- **Git 面板事件驱动自动刷新**（对齐 VS Code 内置 Git 思路，修复「改了 git 库内容，Git 面板不提示」）：
+  - `IdeState` 新增 `gitTick` 计数器：host 递归 fs.watch（已有）→ SSE `{kind:'fs'}` → `subscribeChanges` → 400ms 防抖 → 与 `treeTick` 同源 +1
+  - `GitPanel` 收到 `gitTick` 变化 → **1s 防抖**（合并保存风暴）→ **5s 冷却**（防高频）→ 自动 `git status`；stage/commit 等写操作进行中跳过（防抢 git index 锁）；gitTick 未变不重复安排；卸载清理 timer
+- **Git 未提交变更角标**：
+  - 侧边栏「🛠 Git」按钮蓝底白字角标（>99 显示 99+，对齐「问题」按钮样式）：SidebarTree 常驻统计（不依赖 Git 面板挂载），root/gitTick 驱动 600ms 防抖，`countGitChanges` 汇总所有嵌套仓库变更总数（root 非仓库时），root 切换竞态保护
+  - Git 面板仓库下拉框每个仓库选项显示各自未提交数（`name（main）· N`，0 不显示）：选中仓库直接取最新 status，其他仓库走并行 status 请求（reposRef 镜像 + repoGen 代际保护），仓库发现 / 自动刷新 / 操作完成三处同步
+
+### 修复
+
+- **Git 面板 diff 展开无法收起**：`viewDiff` 补 toggle——再次点击已打开的变更行即收起（原来点开就收不回去，会一直保持展开状态）。
+
 ## [1.3.0] - 2026-08-23
 
 ### 新增
