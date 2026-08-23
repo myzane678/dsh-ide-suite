@@ -137,6 +137,12 @@ const ideHighlight = HighlightStyle.define([
 /** GitLens 式行内 blame：超过该行数的文件不自动标注（输出量与行数线性相关）。 */
 const BLAME_MAX_LINES = 2000
 
+/** 补全框预留空间（行数）：编辑器底部始终保留这么多行空白（对齐 VS Code 的
+ *  scrollBeyondLastLine 行为）——光标写到文件末尾时补全框仍显示在光标下方，
+ *  不会翻转盖住上方刚写的代码。行数表达会跟随字号缩放，任何字号下
+ *  预留高度（行数 × 1.6 行高）都大于补全列表自身高度（10em），保证放得下。 */
+const COMPLETION_RESERVE_LINES = 9
+
 /** 相对时间（GitLens 风格）：刚刚 / N 分钟前 / N 小时前 / N 天前 / 日期。 */
 function relativeTime(unix: number): string {
   if (unix <= 0) return ''
@@ -816,6 +822,11 @@ function CodeMirrorPane({ tab, onContentChange, onSave, onContextAction, onResta
         // 自定义配色完全失效；不带 fallback 时本高亮器与语言高亮并列，注册靠后 CSS 优先
         syntaxHighlighting(ideHighlight),
         EditorView.lineWrapping,
+        // VS Code 式补全空间：编辑器底部预留几行（scroll beyond last line）——
+        // scrollMargins 让自动滚动时光标下方保留空间（打字/移动光标时生效），
+        // 配合下方 theme 的 .cm-content paddingBottom 兜底「已滚动到底」的场景，
+        // 两者结合保证补全框始终出现在光标下方，不盖住上方代码。
+        EditorView.scrollMargins.of((view) => ({ bottom: COMPLETION_RESERVE_LINES * view.defaultLineHeight })),
         // GitLens 式行内 blame gutter：初始空占位，由 useEffect 按
         // (blameEnabled, blame) 动态 reconfigure —— 未启用时整个 gutter 列
         // 不渲染（不占空间），启用且有数据时才挂载。
@@ -823,6 +834,21 @@ function CodeMirrorPane({ tab, onContentChange, onSave, onContextAction, onResta
         tooltips({ position: 'fixed', tooltipSpace: (view) => view.dom.getBoundingClientRect() }),
         signatureTooltipField,
         showTooltip.from(signatureTooltipField),
+        // 失焦清理签名框：光标在括号内时签名框弹出，若此时直接点「▶ 运行」等
+        // 编辑器外部按钮，编辑器失焦但无 CodeMirror state 变化 → 签名框残留
+        // （signatureTooltipField 只在 transaction 时更新），浮层盖住编辑器后
+        // 点击事件被 tooltip 吞掉（CodeMirror eventBelongsToEditor 判定非编辑器
+        // 事件 → 忽略 mousedown）→ 表现为「点不动光标、键盘无效、拖拽还能选中」。
+        // 失焦即清除，从源头防止残留（补全框 autocomplete 自带 focusout 清理，
+        // 签名框此前没有对应处理）。
+        EditorView.domEventHandlers({
+          blur: (event, view) => {
+            if (view.state.field(signatureTooltipField, false) !== null) {
+              view.dispatch({ effects: signatureTooltipEffect.of(null) })
+            }
+            return false
+          },
+        }),
         EditorView.theme({
           '&': {
             height: '100%', fontSize: 'var(--ide-editor-font-size, 13px)',
@@ -830,6 +856,9 @@ function CodeMirrorPane({ tab, onContentChange, onSave, onContextAction, onResta
             color: 'inherit',
           },
           '.cm-scroller': { fontFamily: '"Cascadia Code", Consolas, monospace', lineHeight: '1.6' },
+          // 文档底部预留空白（≈9 行行高，em 跟随字号缩放）：滚动到底后最后一行
+          // 下方仍有空间，补全框显示在空白处而非翻转盖住上方代码（VS Code 习惯）。
+          '.cm-content': { paddingBottom: `${COMPLETION_RESERVE_LINES * 1.6}em` },
           '.cm-gutters': {
             backgroundColor: 'var(--dsw-alias-bg-base, #ffffff)',
             borderRight: '1px solid rgba(127,127,127,0.2)',

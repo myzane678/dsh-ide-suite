@@ -2,6 +2,16 @@
 
 本项目版本与更新记录。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [1.4.2] - 2026-08-23
+
+### 新增
+
+- **补全框底部预留空间**（对齐 VS Code scrollBeyondLastLine 行为）：编辑器底部始终保留 9 行空白——`EditorView.scrollMargins`（自动滚动时光标下方留空间）+ `.cm-content` `paddingBottom: 14.4em`（兜底「已滚动到底」场景，em 跟随字号缩放，任何字号下都大于补全列表自身 10em 高度）。代码写到底时补全框始终显示在光标下方，不再翻转盖住上方刚写的代码。
+
+### 修复
+
+- **「运行完代码后鼠标无法点击光标」偶发 bug**（点不动光标、键盘无效、拖拽还能选中）：签名提示框失焦残留——`signatureTooltipField` 只在 CodeMirror state 变化（transaction）时更新，光标在括号内弹出签名框后直接点「▶ 运行」→ 编辑器失焦但无 transaction → 签名框残留盖住编辑器 → 点击落在 tooltip DOM 上被 `eventBelongsToEditor` 判为非编辑器事件忽略（mousedown 不到编辑器，不定位、不聚焦）。补全框 autocomplete 自带 focusout/blur 清理而签名框没有；修复：`EditorView.domEventHandlers({ blur })` 失焦即清除签名框，从源头防残留（光标回括号内签名框照常弹出）。
+
 ## [1.4.1] - 2026-08-23
 
 ### 修复

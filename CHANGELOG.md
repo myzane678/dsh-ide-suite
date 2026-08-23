@@ -4,6 +4,24 @@ dsh-ide-suite（monorepo）版本与更新记录，跟随仓库 tag（v0.1.0 起
 
 v0.x 为 `dsh-ide-layout` 单包时代历史（全历史随 subtree 合入保留）；各子包完整明细见其各自 CHANGELOG：[layout](dsh-ide-layout/CHANGELOG.md) · [core](dsh-lsp-core/CHANGELOG.md) · [python](dsh-lsp-python/CHANGELOG.md) · [typescript](dsh-lsp-typescript/CHANGELOG.md) · [powershell](dsh-lsp-powershell/CHANGELOG.md) · [java](dsh-lsp-java/CHANGELOG.md)。
 
+## [1.4.2] - 2026-08-23
+
+编辑器交互打磨：补全框底部预留空间（对齐 VS Code scrollBeyondLastLine）+ 修复「运行后鼠标点不动光标」偶发 bug（签名框失焦残留）。仅 `dsh-ide-layout` 升级（1.4.1 → 1.4.2），其余六包不变。
+
+### 新增
+
+- **补全框底部预留空间**：编辑器底部保留 9 行空白（`scrollMargins` + `.cm-content` paddingBottom，em 跟随字号缩放）——代码写到底时补全框始终显示在光标下方，不再翻转盖住上方代码（对齐 VS Code scrollBeyondLastLine）。
+
+### 修复
+
+- **「运行完代码后鼠标无法点击光标」偶发 bug**（点不动光标、键盘无效、拖拽还能选中）：签名提示框失焦残留盖住编辑器、吞掉 mousedown——`signatureTooltipField` 只在 state 变化时更新，光标在括号内直接点「▶ 运行」→ 失焦无 transaction → 残留；修复为失焦即清除签名框（补全框 autocomplete 自带失焦清理，签名框此前没有）。
+
+### 版本
+
+dsh-ide-layout 1.4.1 → 1.4.2；dsh-lsp-core / python / typescript / powershell / java / rust 不变。
+
+> dsh-lsp-powershell 的 vendor tgz 资产无变化，仍使用 v1.0.0 提供的 dsh-lsp-powershell-1.0.0.tgz。
+
 ## [1.4.1] - 2026-08-23
 
 修复：外部 git 操作（命令行/外部工具 commit、checkout、push、pull）后 Git 面板与未提交角标不刷新。仅 `dsh-ide-layout` 升级（1.4.0 → 1.4.1），其余六包不变。
