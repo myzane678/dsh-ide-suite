@@ -33,6 +33,33 @@ import { StreamLanguage } from '@codemirror/language'
 import { toml } from '@codemirror/legacy-modes/mode/toml'
 import { powerShell } from '@codemirror/legacy-modes/mode/powershell'
 import { shell } from '@codemirror/legacy-modes/mode/shell'
+// 扩展语言覆盖：常见文件类型全都有语法高亮（legacy-modes 已在依赖内，零新增依赖）。
+import { csharp, kotlin, scala, objectiveC } from '@codemirror/legacy-modes/mode/clike'
+import { ruby } from '@codemirror/legacy-modes/mode/ruby'
+import { lua } from '@codemirror/legacy-modes/mode/lua'
+import { swift } from '@codemirror/legacy-modes/mode/swift'
+import { r } from '@codemirror/legacy-modes/mode/r'
+import { perl } from '@codemirror/legacy-modes/mode/perl'
+import { groovy } from '@codemirror/legacy-modes/mode/groovy'
+import { haskell } from '@codemirror/legacy-modes/mode/haskell'
+import { clojure } from '@codemirror/legacy-modes/mode/clojure'
+import { erlang } from '@codemirror/legacy-modes/mode/erlang'
+import { cmake } from '@codemirror/legacy-modes/mode/cmake'
+import { diff } from '@codemirror/legacy-modes/mode/diff'
+import { dockerFile } from '@codemirror/legacy-modes/mode/dockerfile'
+import { properties } from '@codemirror/legacy-modes/mode/properties'
+import { protobuf } from '@codemirror/legacy-modes/mode/protobuf'
+import { vb } from '@codemirror/legacy-modes/mode/vb'
+import { oCaml, fSharp } from '@codemirror/legacy-modes/mode/mllike'
+import { coffeeScript } from '@codemirror/legacy-modes/mode/coffeescript'
+import { julia } from '@codemirror/legacy-modes/mode/julia'
+import { stex } from '@codemirror/legacy-modes/mode/stex'
+import { http } from '@codemirror/legacy-modes/mode/http'
+import { tcl } from '@codemirror/legacy-modes/mode/tcl'
+import { scheme } from '@codemirror/legacy-modes/mode/scheme'
+import { gas } from '@codemirror/legacy-modes/mode/gas'
+import { gherkin } from '@codemirror/legacy-modes/mode/gherkin'
+import { pug } from '@codemirror/legacy-modes/mode/pug'
 import { batchLanguage } from '../batch-mode.ts'
 import { languageNameFor } from '../language-names.ts'
 import { apiGitBlame, apiRead, apiReadBinary, apiRun, apiWrite } from '../api.ts'
@@ -75,7 +102,9 @@ interface EditorPaneProps {
  *  一律用本 bundle 内置语法表：CodeMirror 扩展对象跨 bundle 会因
  *  @codemirror/state 双副本抛 "Unrecognized extension value"（.py 打不开
  *  的根因）。语言插件注册表只提供 LSP 服务器配置，不提供语法工厂
- *  （待阶段 2 codemirror 单来源后再回归注册表 syntax）。 */
+ *  （待阶段 2 codemirror 单来源后再回归注册表 syntax）。
+ *  无扩展名/点文件（Makefile、Dockerfile、.gitignore 等）经 split('.').pop()
+ *  得到的就是文件名本身，走同一 switch；未收录的扩展名回退纯文本（同 VS Code）。 */
 function languageFor(path: string): Extension {
   const ext = (path.split('.').pop() ?? '').toLowerCase()
   switch (ext) {
@@ -103,35 +132,84 @@ function languageFor(path: string): Extension {
     case 'cmd': case 'bat': return batchLanguage
     case 'ps1': case 'psm1': case 'psd1': return StreamLanguage.define(powerShell)
     case 'sh': case 'bash': case 'zsh': return StreamLanguage.define(shell)
+    // —— 扩展覆盖：常见配置/工程文件与更多编程语言（新增扩展名时同步
+    // language-names.ts 的展示名表，两侧由 language-names.test.ts 回归护栏）——
+    case 'makefile': case 'mk': return StreamLanguage.define(shell)
+    case 'dockerfile': return StreamLanguage.define(dockerFile)
+    case 'gitignore': case 'gitattributes': case 'dockerignore': return StreamLanguage.define(shell)
+    case 'editorconfig': case 'npmrc': case 'env': case 'ini': case 'cfg': case 'conf':
+    case 'properties': return StreamLanguage.define(properties)
+    case 'jenkinsfile': case 'gradle': case 'groovy': return StreamLanguage.define(groovy)
+    case 'cs': return StreamLanguage.define(csharp)
+    case 'kt': case 'kts': return StreamLanguage.define(kotlin)
+    case 'scala': return StreamLanguage.define(scala)
+    case 'm': case 'mm': return StreamLanguage.define(objectiveC)
+    case 'rb': return StreamLanguage.define(ruby)
+    case 'lua': return StreamLanguage.define(lua)
+    case 'swift': return StreamLanguage.define(swift)
+    case 'r': return StreamLanguage.define(r)
+    case 'pl': case 'pm': return StreamLanguage.define(perl)
+    case 'hs': return StreamLanguage.define(haskell)
+    case 'clj': case 'cljs': case 'cljc': case 'edn': return StreamLanguage.define(clojure)
+    case 'erl': case 'hrl': return StreamLanguage.define(erlang)
+    case 'cmake': return StreamLanguage.define(cmake)
+    case 'diff': case 'patch': return StreamLanguage.define(diff)
+    case 'proto': return StreamLanguage.define(protobuf)
+    case 'vb': return StreamLanguage.define(vb)
+    case 'ml': case 'mli': return StreamLanguage.define(oCaml)
+    case 'fs': case 'fsi': case 'fsx': return StreamLanguage.define(fSharp)
+    case 'coffee': return StreamLanguage.define(coffeeScript)
+    case 'jl': return StreamLanguage.define(julia)
+    case 'tex': case 'latex': return StreamLanguage.define(stex)
+    case 'http': return StreamLanguage.define(http)
+    case 'tcl': return StreamLanguage.define(tcl)
+    case 'scm': case 'ss': return StreamLanguage.define(scheme)
+    case 'asm': case 's': return StreamLanguage.define(gas)
+    case 'feature': return StreamLanguage.define(gherkin)
+    case 'pug': case 'jade': return StreamLanguage.define(pug)
     default: return []
   }
 }
 
-/** 高对比高亮：经典 IDE 配色（关键字深蓝加粗 / 注释绿斜体 / 字符串暖棕 / 数字深绿）。
- *  配色刻意避开红色系：红色只留给 LSP 诊断的「红色下波浪线」（错误语义唯一来源），
- *  避免普通高亮被误认成报错。颜色用 CSS 变量承载：默认亮色系（浅背景），
- *  皮肤（如 maid-atelier）可在自己的 CSS 里按亮/暗主题覆盖变量适配深背景。 */
+/** 代码高亮完全对齐 VS Code 默认主题：亮色 = Light+（var 回退值），暗色 = Dark+
+ *  （mountPanels 注入的 body[data-ds-dark-theme] 变量组，见 mount.tsx）。颜色继续用
+ *  CSS 变量承载，皮肤（如 maid-atelier）仍可在自己的 CSS 里覆盖同款变量微调。
+ *  唯一保留的刻意偏差：invalid 语法错误保持中性灰——红色语义只留给 LSP 报错波浪线
+ *  （VS Code 官方 invalid 色为 #CD3131/#F44747，需要完全一致时改这一行即可）。 */
 const ideHighlight = HighlightStyle.define([
-  { tag: [t.keyword, t.controlKeyword, t.moduleKeyword, t.operatorKeyword, t.definitionKeyword], color: 'var(--ide-hl-keyword, #0000FF)', fontWeight: '600' },
-  { tag: [t.comment, t.lineComment, t.blockComment, t.docComment], color: 'var(--ide-hl-comment, #008000)', fontStyle: 'italic' },
-  // 字符串用暖棕（避开 #A31515 深红，防止与错误提示混淆）。
-  { tag: [t.string, t.special(t.string), t.character], color: 'var(--ide-hl-string, #B45309)' },
-  { tag: [t.number, t.integer, t.float], color: 'var(--ide-hl-number, #098658)' },
-  { tag: [t.bool, t.null, t.atom], color: 'var(--ide-hl-bool, #0000FF)' },
+  // 控制流关键字（if/else/for/return…）单独成色：Light+ 紫 #AF00DB / Dark+ 紫 #C586C0。
+  { tag: t.controlKeyword, color: 'var(--ide-hl-control, #AF00DB)' },
+  // 其余关键字（含 import/const/typeof 等子类）+ 修饰符（public/async）+ this/self
+  // + 预处理指令：Light+ 蓝 #0000FF / Dark+ 蓝 #569CD6（VS Code 不加粗）。
+  { tag: [t.keyword, t.modifier, t.self, t.processingInstruction], color: 'var(--ide-hl-keyword, #0000FF)' },
+  { tag: [t.comment, t.lineComment, t.blockComment, t.docComment], color: 'var(--ide-hl-comment, #008000)' },
+  { tag: [t.string, t.special(t.string)], color: 'var(--ide-hl-string, #A31515)' },
+  { tag: t.regexp, color: 'var(--ide-hl-regexp, #811F3F)' },
+  // 转义字符（\n 等）：Light+ #EE0000 / Dark+ #D7BA7D。
+  { tag: t.escape, color: 'var(--ide-hl-escape, #EE0000)' },
+  { tag: [t.number, t.integer, t.float, t.unit], color: 'var(--ide-hl-number, #098658)' },
+  // 常量（true/false/null/undefined）与字符字面量：VS Code 里同为关键字蓝。
+  { tag: [t.bool, t.null, t.atom, t.character], color: 'var(--ide-hl-bool, #0000FF)' },
   { tag: [t.function(t.variableName), t.definition(t.function(t.variableName))], color: 'var(--ide-hl-function, #795E26)' },
   { tag: [t.className, t.typeName, t.definition(t.className)], color: 'var(--ide-hl-class, #267F99)' },
-  { tag: [t.propertyName], color: 'var(--ide-hl-property, #0070C1)' },
-  { tag: [t.definition(t.variableName)], color: 'var(--ide-hl-variable, #001080)' },
-  // invalid 高亮改中性灰：真正的语法错误由 LSP 红色波浪线表达（红线只此一处语义）。
+  { tag: t.propertyName, color: 'var(--ide-hl-property, #001080)' },
+  // 变量（声明 + 引用）：VS Code 的 variable 语义色 #001080 / #9CDCFE。
+  { tag: [t.variableName, t.definition(t.variableName)], color: 'var(--ide-hl-variable, #001080)' },
+  // HTML/XML 标签与属性名：Light+ #800000 / #E50000，Dark+ #569CD6 / #9CDCFE。
+  { tag: t.tagName, color: 'var(--ide-hl-tag, #800000)' },
+  { tag: t.attributeName, color: 'var(--ide-hl-attribute, #E50000)' },
   { tag: t.invalid, color: 'var(--ide-hl-invalid, #6B7280)' },
-  // 兜底：未显式覆盖的符号类 tag 统一用主文字色（防语言包/默认 style 带红色系）。
-  { tag: [t.operator, t.punctuation, t.bracket, t.separator, t.attributeName, t.meta, t.processingInstruction], color: 'var(--ide-hl-base, #24292F)' },
-  // Markdown：标题加粗深蓝 / 强调斜体 / 链接下划线蓝 / 引用与行内代码 / 删除线灰。
-  { tag: [t.heading, t.heading1, t.heading2, t.heading3, t.heading4, t.heading5, t.heading6], color: 'var(--ide-hl-heading, #0000FF)', fontWeight: '600' },
-  { tag: [t.emphasis, t.strong], color: 'var(--ide-hl-emphasis, #795E26)', fontStyle: 'italic' },
-  { tag: [t.link, t.url], color: 'var(--ide-hl-link, #0070C1)', textDecoration: 'underline' },
-  { tag: [t.quote, t.monospace], color: 'var(--ide-hl-quote, #008000)' },
-  { tag: t.strikethrough, color: 'var(--ide-hl-strikethrough, #9ca3af)' },
+  // 兜底：未显式覆盖的符号类 tag 统一用主文字色（VS Code 默认前景 #000000/#D4D4D4）。
+  { tag: [t.operator, t.punctuation, t.bracket, t.separator, t.meta], color: 'var(--ide-hl-base, #000000)' },
+  // Markdown：标题加粗 #800000/#569CD6；粗体 #000080/#569CD6；斜体只变字形不变色；
+  // 链接只加下划线；行内代码 #800000/#CE9178；列表符号 #0451A5/#6796E6；删除线只画线。
+  { tag: [t.heading, t.heading1, t.heading2, t.heading3, t.heading4, t.heading5, t.heading6], color: 'var(--ide-hl-heading, #800000)', fontWeight: '700' },
+  { tag: t.strong, color: 'var(--ide-hl-strong, #000080)', fontWeight: '700' },
+  { tag: t.emphasis, fontStyle: 'italic' },
+  { tag: [t.link, t.url], textDecoration: 'underline' },
+  { tag: t.monospace, color: 'var(--ide-hl-raw, #800000)' },
+  { tag: t.list, color: 'var(--ide-hl-list, #0451A5)' },
+  { tag: t.strikethrough, textDecoration: 'line-through' },
 ])
 
 /** GitLens 式行内 blame：超过该行数的文件不自动标注（输出量与行数线性相关）。 */
@@ -853,7 +931,9 @@ function CodeMirrorPane({ tab, onContentChange, onSave, onContextAction, onResta
           '&': {
             height: '100%', fontSize: 'var(--ide-editor-font-size, 13px)',
             backgroundColor: 'var(--dsw-alias-bg-base, #ffffff)',
-            color: 'inherit',
+            // 默认文字色对齐 VS Code 前景（Light+ #000000 / Dark+ #D4D4D4），
+            // 不再 inherit 皮肤的标签色（避免正文偏色）。
+            color: 'var(--ide-hl-base, #000000)',
           },
           '.cm-scroller': { fontFamily: '"Cascadia Code", Consolas, monospace', lineHeight: '1.6' },
           // 文档底部预留空白（≈9 行行高，em 跟随字号缩放）：滚动到底后最后一行

@@ -65,6 +65,60 @@ function findSidebarIn(container: HTMLElement): HTMLElement | null {
   return candidates[0] ?? null
 }
 
+/** WCO（桌面无边框窗口的 Window Controls Overlay）最小类型：本项目 lib.dom
+ *  未收录该 API，浏览器/普通网页环境不支持时为 undefined。 */
+interface WindowControlsOverlayLike {
+  isVisible: boolean
+  getTitlebarAreaRect(): DOMRect | null
+  addEventListener(type: 'geometrychange', listener: () => void): void
+  removeEventListener(type: 'geometrychange', listener: () => void): void
+}
+
+/** 安全取 WCO 对象（不支持的环境返回 undefined）。 */
+function wco(): WindowControlsOverlayLike | undefined {
+  return (navigator as Navigator & { windowControlsOverlay?: WindowControlsOverlayLike }).windowControlsOverlay
+}
+
+/** 原生顶栏（无边框窗口的自绘标题栏行，如「DSH Desktop v2.0.3」）的底部 y 坐标：
+ *  workbench / 聊天拖拽手柄等 fixed 元素从它下方开始，避免盖住宿主标题栏。
+ *  四级探测，全不中返回 0（= 顶到窗口顶部，浏览器模式原行为）：
+ *  ① WCO API（桌面无边框窗口的权威值，皮肤同款测量）；
+ *  ② DOM 标题栏元素（i 忽略大小写——CSS 属性选择器区分大小写，驼峰类名
+ *     如 titleBar 用小写匹配会落空）；
+ *  ③ 探针：在 workbench 顶部取一点，elementsFromPoint 返回被盖住的下层元素
+ *     堆栈，跳过 workbench 自身后遇到的第一个条带状元素即原生标题栏（完全不
+ *     依赖类名特征）；
+ *  ④ sidebar 元素顶部兜底（与 workbench 同属 frame 内容行，必然在标题栏下方）。 */
+function nativeTopInset(probeX: number): number {
+  const overlay = wco()
+  if (overlay !== undefined && overlay.isVisible) {
+    const rect = overlay.getTitlebarAreaRect()
+    if (rect !== null && rect.height > 0 && rect.bottom > 0 && rect.bottom < window.innerHeight) {
+      return Math.round(rect.bottom)
+    }
+  }
+  const titlebar = document.querySelector<HTMLElement>('[class*="titlebar" i]')
+  if (titlebar !== null) {
+    const rect = titlebar.getBoundingClientRect()
+    if (rect.height > 0 && rect.bottom > 0 && rect.bottom < window.innerHeight) return Math.round(rect.bottom)
+  }
+  for (const el of document.elementsFromPoint(probeX, 6)) {
+    if (workbenchHost !== null && (el === workbenchHost || workbenchHost.contains(el))) continue
+    if (el.tagName === 'HTML' || el.tagName === 'BODY') continue
+    const rect = el.getBoundingClientRect()
+    // 条带状：有明显高度（>8px）但远不满屏（≤200px），且位于窗口上半部
+    if (rect.height >= 8 && rect.height <= 200 && rect.bottom > 0 && rect.bottom < window.innerHeight / 2) {
+      return Math.round(rect.bottom)
+    }
+  }
+  const sidebar = document.querySelector<HTMLElement>('[class*="sidebarCol"]')
+  if (sidebar !== null) {
+    const top = sidebar.getBoundingClientRect().top
+    if (top > 0 && top < window.innerHeight) return Math.round(top)
+  }
+  return 0
+}
+
 const MIN_CHAT_PX = 440
 const EDITOR_MIN = 300
 
@@ -77,6 +131,9 @@ export class IdeLayoutController {
   private detailsObserver: ResizeObserver | null = null
   private footObserver: ResizeObserver | null = null
   private waitObserver: MutationObserver | null = null
+  private titlebarObserver: ResizeObserver | null = null
+  private titlebarObserved: HTMLElement | null = null
+  private wcoGeometryHandler: (() => void) | null = null
   private sidebarInjected = false
   private sidebarWidth = 280
   private frameWidth = 0
@@ -108,11 +165,25 @@ export class IdeLayoutController {
         const sidebar = this.frame !== null ? findSidebarIn(this.frame) : findSidebar()
         if (sidebar !== null) this.embedSidebarTree(sidebar)
       }
+      this.bindTitlebar()
       this.apply()
     }
     this.waitObserver = new MutationObserver(() => { tryAttach() })
     this.waitObserver.observe(document.body, { childList: true, subtree: true })
     tryAttach()
+  }
+
+  /** 跟踪原生标题栏高度变化（窗口控制区叠加 geometrychange / 皮肤调整都会改它
+   *  的高度）：高度变化 → apply() 重测 topInset。标题栏元素被宿主重建时重新绑定。 */
+  private bindTitlebar(): void {
+    if (this.titlebarObserver === null) {
+      this.titlebarObserver = new ResizeObserver(() => this.apply())
+    }
+    const titlebar = document.querySelector<HTMLElement>('[class*="titlebar" i]')
+    if (titlebar === null || titlebar === this.titlebarObserved) return
+    if (this.titlebarObserved !== null) this.titlebarObserver.unobserve(this.titlebarObserved)
+    this.titlebarObserver.observe(titlebar)
+    this.titlebarObserved = titlebar
   }
 
   /** Create the fixed editor workbench portal host + chat handle. */
@@ -135,6 +206,12 @@ export class IdeLayoutController {
     if (sidebar !== null) this.sidebarObserver.observe(sidebar)
 
     this.chatHandle = this.createChatHandle()
+    // WCO（桌面无边框窗口）标题栏几何变化 → 重测 fixed 元素的 top 偏移。
+    const overlay = wco()
+    if (overlay !== undefined && this.wcoGeometryHandler === null) {
+      this.wcoGeometryHandler = () => this.apply()
+      overlay.addEventListener('geometrychange', this.wcoGeometryHandler)
+    }
     this.disposers.push(this.layout.subscribe(() => this.apply()))
     // 编辑区显隐（editorVisible）变化时同步布局
     this.disposers.push(this.ide.subscribe(() => this.apply()))
@@ -303,7 +380,11 @@ export class IdeLayoutController {
       centerCol.style.marginLeft = editorVisible ? `${work}px` : '0'
       centerCol.style.minWidth = editorVisible ? '0' : ''
     }
+    // fixed 元素从原生标题栏下方开始（无标题栏 → 0，原行为）。探针 x 取
+    // workbench 内左侧一点（编辑区最少 300px 宽，+40 必在 workbench 范围内）。
+    const topInset = nativeTopInset(this.sidebarWidth + 40)
     if (workbenchHost !== null) {
+      workbenchHost.style.top = `${topInset}px`
       workbenchHost.style.left = `${this.sidebarWidth}px`
       workbenchHost.style.width = `${work}px`
       workbenchHost.style.pointerEvents = editorVisible && work > 0 ? 'auto' : 'none'
@@ -311,6 +392,7 @@ export class IdeLayoutController {
     }
     if (this.chatHandle !== null) {
       // 手柄挂在 body（fixed），用视口绝对坐标：sidebar 右缘 + 编辑器宽度
+      this.chatHandle.style.top = `${topInset}px`
       this.chatHandle.style.left = `${this.sidebarWidth + work}px`
       this.chatHandle.style.display = editorVisible ? 'block' : 'none'
     }
@@ -323,6 +405,12 @@ export class IdeLayoutController {
     this.frameObserver?.disconnect()
     this.detailsObserver?.disconnect()
     this.footObserver?.disconnect()
+    this.titlebarObserver?.disconnect()
+    this.titlebarObserved = null
+    if (this.wcoGeometryHandler !== null) {
+      wco()?.removeEventListener('geometrychange', this.wcoGeometryHandler)
+      this.wcoGeometryHandler = null
+    }
     for (const dispose of this.disposers) dispose()
     // 恢复被改过 padding-bottom 的元素（sidebar 自身 + root 容器）
     const restorePadding = (el: HTMLElement | null, original: string): void => {

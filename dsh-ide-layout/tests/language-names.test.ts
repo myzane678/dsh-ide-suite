@@ -13,6 +13,14 @@ describe('轻量语法注册表（状态栏展示名）', () => {
     expect(languageNameFor('Dockerfile.bat')).toBe('Batch')
   })
 
+  it('扩展覆盖语言返回展示名（与 languageFor 扩展覆盖同步）', () => {
+    expect(languageNameFor('Makefile')).toBe('Makefile')
+    expect(languageNameFor('.gitignore')).toBe('Git Ignore')
+    expect(languageNameFor('Dockerfile')).toBe('Dockerfile')
+    expect(languageNameFor('app.rb')).toBe('Ruby')
+    expect(languageNameFor('Program.cs')).toBe('C#')
+  })
+
   it('LSP 语言也有兜底名（lsp-core 未注入或注册表未命中时）', () => {
     expect(languageNameFor('main.ts')).toBe('TypeScript')
     expect(languageNameFor('app.py')).toBe('Python')
@@ -26,6 +34,6 @@ describe('轻量语法注册表（状态栏展示名）', () => {
 
   it('未收录扩展名返回 undefined（状态栏回退 plaintext）', () => {
     expect(languageNameFor('data.bin')).toBeUndefined()
-    expect(languageNameFor('Makefile')).toBeUndefined()
+    expect(languageNameFor('file.unknownext')).toBeUndefined()
   })
 })

@@ -27,6 +27,22 @@ const LANGUAGE_NAMES: Partial<Record<string, string>> = {
   cmd: 'Batch', bat: 'Batch',
   ps1: 'PowerShell', psm1: 'PowerShell', psd1: 'PowerShell',
   sh: 'Shell', bash: 'Shell', zsh: 'Shell',
+  // —— 与 EditorPane languageFor 扩展覆盖同步（配置/工程文件 + 更多编程语言）——
+  makefile: 'Makefile', mk: 'Makefile',
+  dockerfile: 'Dockerfile',
+  gitignore: 'Git Ignore', gitattributes: 'Git Attributes', dockerignore: 'Docker Ignore',
+  editorconfig: 'EditorConfig', npmrc: 'NPM Config', env: 'Env',
+  ini: 'INI', cfg: 'Config', conf: 'Config', properties: 'Properties',
+  jenkinsfile: 'Jenkins', gradle: 'Gradle', groovy: 'Groovy',
+  cs: 'C#', kt: 'Kotlin', kts: 'Kotlin', scala: 'Scala', m: 'Objective-C', mm: 'Objective-C',
+  rb: 'Ruby', lua: 'Lua', swift: 'Swift', r: 'R', pl: 'Perl', pm: 'Perl',
+  hs: 'Haskell', clj: 'Clojure', cljs: 'Clojure', cljc: 'Clojure', edn: 'Clojure',
+  erl: 'Erlang', hrl: 'Erlang', cmake: 'CMake',
+  diff: 'Diff', patch: 'Diff', proto: 'Protobuf', vb: 'VB',
+  ml: 'OCaml', mli: 'OCaml', fs: 'F#', fsi: 'F#', fsx: 'F#',
+  coffee: 'CoffeeScript', jl: 'Julia', tex: 'LaTeX', latex: 'LaTeX',
+  http: 'HTTP', tcl: 'Tcl', scm: 'Scheme', ss: 'Scheme',
+  asm: 'Assembly', s: 'Assembly', feature: 'Gherkin', pug: 'Pug', jade: 'Pug',
 }
 
 /** 扩展名 → 展示名；未收录返回 undefined（调用方回退 plaintext）。 */

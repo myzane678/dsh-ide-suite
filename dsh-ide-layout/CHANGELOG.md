@@ -2,6 +2,26 @@
 
 本项目版本与更新记录。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [1.5.0] - 2026-08-30
+
+### 新增
+
+- **代码高亮完全对齐 VS Code 默认主题**（亮色 = Light+，色值取自 microsoft/vscode 官方主题 JSON，非记忆值）：
+  - 字符串恢复标志性 `#A31515`，变量/属性统一 `#001080`，控制流关键字（if/else/for/return）单独成紫色 `#AF00DB`，Markdown 标题 `#800000` 加粗，正则 `#811F3F`、转义字符 `#EE0000`、HTML 标签/属性名 `#800000`/`#E50000`、this/self 与 CSS 单位补齐
+  - 去掉 VS Code 没有的装饰：关键字不再加粗、注释不再斜体；强调只斜体不变色、链接只下划线、删除线只画线（对齐 markup.* 规则）
+  - 编辑器默认文字色从「继承皮肤标签色」改为 VS Code 前景色（`#000000`）
+  - **暗色主题 Dark+ 默认组**：挂载时注入 `body[data-ds-dark-theme]` 高亮变量组——暗色不再依赖皮肤覆盖；顺带修复「暗主题下皮肤未覆盖的运算符/标点掉回亮色深灰 `#24292F`、深底上看不清」（现为 Dark+ 的 `#D4D4D4`）
+  - 唯一保留的刻意偏差：invalid 语法错误 token 保持中性灰（红色语义只留给 LSP 报错波浪线；VS Code 官方 invalid 色为 `#CD3131`/`#F44747`，需要完全一致改 `EditorPane.tsx` 一行）
+- **语言覆盖扩展（约 25 种，零新增依赖，全部来自已有 @codemirror/legacy-modes）**：
+  - 配置/工程文件：Makefile/.mk、Dockerfile、.gitignore/.gitattributes/.dockerignore、.editorconfig/.npmrc/.env/.ini/.cfg/.conf/.properties、Jenkinsfile/Gradle
+  - 编程语言：C#、Kotlin、Scala、Objective-C（.m/.mm）、Ruby、Lua、Swift、R、Perl、Haskell、Clojure、Erlang、F#、OCaml、VB、CoffeeScript、Julia、Tcl、Scheme、汇编（.asm/.s）
+  - 其它：CMake、diff/patch、Protobuf、LaTeX、HTTP、Gherkin（.feature）、Pug/Jade
+  - 状态栏展示名表（language-names.ts）同步扩展；未收录扩展名仍为纯文本（同 VS Code 行为）
+
+### 修复
+
+- **编辑区盖住原生标题栏**：workbench portal 与聊天拖拽手柄均为 `position:fixed; top:0`，在无边框窗口（页面内自绘标题栏「DSH Desktop v2.0.3」）上直接盖住顶栏。改为实测原生标题栏底部偏移——四级探测：① WCO API（桌面无边框窗口权威值，监听 geometrychange 自动跟随）→ ② `[class*="titlebar" i]` 忽略大小写类名 → ③ `elementsFromPoint` 命中探针（取 workbench 顶部一点的下层元素堆栈，第一个条带状元素即标题栏，完全不依赖类名——CSS 属性选择器区分大小写，驼峰类名会让小写匹配落空）→ ④ sidebar 元素顶部兜底（与 workbench 同属 frame 内容行）。浏览器等无标题栏环境全部落空回退 0（原行为）。
+
 ## [1.4.2] - 2026-08-23
 
 ### 新增

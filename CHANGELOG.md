@@ -4,6 +4,25 @@ dsh-ide-suite（monorepo）版本与更新记录，跟随仓库 tag（v0.1.0 起
 
 v0.x 为 `dsh-ide-layout` 单包时代历史（全历史随 subtree 合入保留）；各子包完整明细见其各自 CHANGELOG：[layout](dsh-ide-layout/CHANGELOG.md) · [core](dsh-lsp-core/CHANGELOG.md) · [python](dsh-lsp-python/CHANGELOG.md) · [typescript](dsh-lsp-typescript/CHANGELOG.md) · [powershell](dsh-lsp-powershell/CHANGELOG.md) · [java](dsh-lsp-java/CHANGELOG.md)。
 
+## [1.5.0] - 2026-08-30
+
+代码高亮全面对齐 VS Code 默认主题（Light+ 官方色板 + Dark+ 暗色默认组）+ 编辑器语言覆盖扩展约 25 种 + 修复编辑区盖住原生标题栏。仅 `dsh-ide-layout` 升级（1.4.2 → 1.5.0），其余六包不变。
+
+### 新增
+
+- **代码高亮完全对齐 VS Code 默认主题**：亮色 = Light+ 官方色板（色值取自 microsoft/vscode 官方主题 JSON）——字符串 `#A31515`、变量/属性 `#001080`、控制流关键字紫色 `#AF00DB`、Markdown 标题 `#800000` 加粗；补齐正则/转义字符/HTML 标签与属性名/this/CSS 单位等 token；去掉 VS Code 没有的关键字加粗与注释斜体；编辑器默认文字色对齐 VS Code 前景。**暗色 = Dark+ 默认组**（挂载注入 `body[data-ds-dark-theme]` 变量组，暗色不再依赖皮肤覆盖，并修复暗主题下运算符/标点掉回亮色深灰、深底看不清的问题）。唯一保留偏差：invalid token 中性灰（红色只留给 LSP 报错波浪线）。
+- **语言覆盖扩展（约 25 种，零新增依赖）**：配置/工程文件（Makefile、Dockerfile、.gitignore、.editorconfig/.npmrc/.env/.ini、Jenkinsfile/Gradle 等）+ 编程语言（C#、Kotlin、Scala、Objective-C、Ruby、Lua、Swift、R、Perl、Haskell、Clojure、Erlang、F#、OCaml、VB、CoffeeScript、Julia、Tcl、Scheme、汇编等）+ CMake/diff/Protobuf/LaTeX/Gherkin/Pug；状态栏展示名表同步；未收录扩展名仍为纯文本（同 VS Code）。
+
+### 修复
+
+- **编辑区盖住原生标题栏**：fixed workbench portal 与聊天拖拽手柄从实测原生标题栏底部开始（四级探测：WCO API → 忽略大小写 titlebar 类名 → elementsFromPoint 命中探针（不依赖类名）→ sidebar 顶部兜底；无标题栏环境回退 0 原行为；WCO geometrychange 自动跟随）。
+
+### 版本
+
+dsh-ide-layout 1.4.2 → 1.5.0；dsh-lsp-core / python / typescript / powershell / java / rust 不变。
+
+> dsh-lsp-powershell 的 vendor tgz 资产无变化，仍使用 v1.0.0 提供的 dsh-lsp-powershell-1.0.0.tgz。
+
 ## [1.4.2] - 2026-08-23
 
 编辑器交互打磨：补全框底部预留空间（对齐 VS Code scrollBeyondLastLine）+ 修复「运行后鼠标点不动光标」偶发 bug（签名框失焦残留）。仅 `dsh-ide-layout` 升级（1.4.1 → 1.4.2），其余六包不变。

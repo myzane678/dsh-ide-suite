@@ -18,6 +18,31 @@ import type { BuildResult, BuildTaskName } from './api.ts'
 const WORKBENCH_SELECTOR = '[data-ide-workbench]'
 const SIDEBAR_TREE_SELECTOR = '[data-ide-sidebar-tree]'
 
+/** 暗色主题下的高亮变量默认组（VS Code Dark+ 官方色值）。亮色默认值内嵌在
+ *  EditorPane 高亮样式的 var() 回退里；暗色没有独立样式表，挂载时注入一次。
+ *  选择器与皮肤（maid-atelier）同形：皮肤覆盖的 10 个变量与本组 Dark+ 值一致，
+ *  先后顺序不影响结果；皮肤未覆盖的变量（base/heading/regexp 等暗色值）由本组
+ *  兜底——否则会掉回亮色回退值（深灰运算符压深背景，对比度差）。静态样式
+ *  不随 unmount 移除（幂等注入，重挂载零成本）。 */
+let darkHighlightStyleInjected = false
+function injectDarkHighlightStyle(): void {
+  if (darkHighlightStyleInjected) return
+  darkHighlightStyleInjected = true
+  const style = document.createElement('style')
+  style.id = 'dsh-ide-layout-vscode-dark'
+  style.textContent = [
+    'body[data-ds-dark-theme] [data-ide-workbench]{',
+    '--ide-hl-keyword:#569cd6;--ide-hl-control:#c586c0;--ide-hl-comment:#6a9955;',
+    '--ide-hl-string:#ce9178;--ide-hl-regexp:#d16969;--ide-hl-escape:#d7ba7d;',
+    '--ide-hl-number:#b5cea8;--ide-hl-bool:#569cd6;--ide-hl-function:#dcdcaa;',
+    '--ide-hl-class:#4ec9b0;--ide-hl-property:#9cdcfe;--ide-hl-variable:#9cdcfe;',
+    '--ide-hl-base:#d4d4d4;--ide-hl-heading:#569cd6;--ide-hl-strong:#569cd6;',
+    '--ide-hl-tag:#569cd6;--ide-hl-attribute:#9cdcfe;--ide-hl-raw:#ce9178;--ide-hl-list:#6796e6;',
+    '}',
+  ].join('')
+  document.head.appendChild(style)
+}
+
 /**
  * 统计工作区未提交变更总数（Git 按钮角标）：
  * root 本身是仓库 → 直接用 status；否则汇总所有发现的嵌套仓库（多仓库工作区
@@ -349,6 +374,7 @@ function Workbench({ api }: { api: IdeMountApi }): JSX.Element {
  * @returns a disposer unmounting both trees.
  */
 export function mountPanels(api: IdeMountApi): () => void {
+  injectDarkHighlightStyle()
   let sidebarRoot: Root | undefined
   let workbenchRoot: Root | undefined
   const disposers: Array<() => void> = []
