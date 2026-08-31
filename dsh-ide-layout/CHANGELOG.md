@@ -2,6 +2,15 @@
 
 本项目版本与更新记录。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [1.5.1] - 2026-08-31
+
+### 修复
+
+- **编辑区盖住宿主设置面板**：设置模态（`VOzbGW_overlay`，`position:fixed; z-index:1000`）**原地渲染在侧边栏 DOM 子树内**（无 createPortal——从 DSH Desktop asar 内置源码证实），其 z-1000 被侧边栏受限层叠上下文困在 body 层编辑器之下，任何编辑器 z-index 都无法让位。修复：监听设置触发按钮（`[data-slot='sidebar.settings']`）的 `aria-expanded`（与皮肤检测设置开合的信号一致），面板打开期间编辑器外壳与聊天拖拽手柄 `display:none`（DOM/状态保留，关闭即恢复）；MutationObserver 自动跟随，按钮被宿主重建自动重绑。
+- **编辑器层级治理与顶部避让**（伴随上一修复的层序整理）：
+  - workbench / 聊天拖拽手柄 / 消息导航条 z-index 20/40/59 → **10**（主内容层：高于主栏内容与皮肤低层装饰，低于宿主浮层容器 `overlayLayer` 的 z-20 与各级对话框）——原 z-20 与宿主浮层同层且 DOM 靠后，会盖住设置页与皮肤装饰
+  - 编辑器顶部偏移（`nativeTopInset`）在原生标题栏四级探测（WCO API → 忽略大小写 titlebar 类名 → elementsFromPoint 命中探针 → sidebar 顶部兜底）之外，**叠加皮肤顶部装饰带下缘**（`skinTopTrimInset()`，`[data-skin-chrome='top-trim']` 蕾丝帘 z-20 pointer-events:none）——降层后标签栏/工具栏会被蕾丝帘遮住，改从装饰带下缘开始后完整可见，并与聊天区头部水平对齐
+
 ## [1.5.0] - 2026-08-30
 
 ### 新增

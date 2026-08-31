@@ -4,6 +4,22 @@ dsh-ide-suite（monorepo）版本与更新记录，跟随仓库 tag（v0.1.0 起
 
 v0.x 为 `dsh-ide-layout` 单包时代历史（全历史随 subtree 合入保留）；各子包完整明细见其各自 CHANGELOG：[layout](dsh-ide-layout/CHANGELOG.md) · [core](dsh-lsp-core/CHANGELOG.md) · [python](dsh-lsp-python/CHANGELOG.md) · [typescript](dsh-lsp-typescript/CHANGELOG.md) · [powershell](dsh-lsp-powershell/CHANGELOG.md) · [java](dsh-lsp-java/CHANGELOG.md)。
 
+## [1.5.1] - 2026-08-31
+
+层级治理：设置面板打开时编辑器外壳整体让位 + 编辑器降为主内容层（z-10）+ 顶部避开皮肤装饰带。仅 `dsh-ide-layout` 升级（1.5.0 → 1.5.1），其余六包不变。
+
+### 修复
+
+- **编辑区盖住宿主设置面板**：设置模态（fixed z-1000）原地渲染在侧边栏 DOM 子树内（非 body portal），z-1000 被受限层叠上下文困在 body 层编辑器之下，纯 z-index 无解——改为监听设置触发按钮（`[data-slot='sidebar.settings']`）的 `aria-expanded`，面板打开期间编辑器外壳与聊天拖拽手柄 `display:none`（状态保留，关闭即恢复）。
+- **编辑器降为主内容层**：workbench / 聊天拖拽手柄 / 消息导航条 z-index 20/40/59 → 10（高于主栏内容与皮肤低层装饰，低于宿主浮层 `overlayLayer` z-20 与各级对话框）。
+- **顶部避开皮肤装饰带**：编辑器顶部偏移在标题栏四级探测之外叠加皮肤顶部装饰带（`[data-skin-chrome='top-trim']` 蕾丝帘）下缘，标签栏/工具栏不再被遮盖，并与聊天区头部对齐。
+
+### 版本
+
+dsh-ide-layout 1.5.0 → 1.5.1；dsh-lsp-core / python / typescript / powershell / java / rust 不变。
+
+> dsh-lsp-powershell 的 vendor tgz 资产无变化，仍使用 v1.0.0 提供的 dsh-lsp-powershell-1.0.0.tgz。
+
 ## [1.5.0] - 2026-08-30
 
 代码高亮全面对齐 VS Code 默认主题（Light+ 官方色板 + Dark+ 暗色默认组）+ 编辑器语言覆盖扩展约 25 种 + 修复编辑区盖住原生标题栏。仅 `dsh-ide-layout` 升级（1.4.2 → 1.5.0），其余六包不变。

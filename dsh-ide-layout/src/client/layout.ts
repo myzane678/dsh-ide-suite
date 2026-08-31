@@ -79,44 +79,71 @@ function wco(): WindowControlsOverlayLike | undefined {
   return (navigator as Navigator & { windowControlsOverlay?: WindowControlsOverlayLike }).windowControlsOverlay
 }
 
-/** 原生顶栏（无边框窗口的自绘标题栏行，如「DSH Desktop v2.0.3」）的底部 y 坐标：
- *  workbench / 聊天拖拽手柄等 fixed 元素从它下方开始，避免盖住宿主标题栏。
- *  四级探测，全不中返回 0（= 顶到窗口顶部，浏览器模式原行为）：
+/** 皮肤顶部装饰带（maid-atelier 的蕾丝帘，`data-skin-chrome='top-trim'`，fixed
+ *  z-20、pointer-events:none）的下缘：按皮肤设计它浮在主内容之上——编辑器从它
+ *  下方开始，标签栏/工具栏才不会被盖住。无皮肤（元素不存在）时返回 0。 */
+function skinTopTrimInset(): number {
+  const trim = document.querySelector<HTMLElement>('[data-skin-chrome="top-trim"]')
+  if (trim === null) return 0
+  const rect = trim.getBoundingClientRect()
+  if (rect.height <= 0 || rect.bottom <= 0 || rect.bottom >= window.innerHeight) return 0
+  return Math.round(rect.bottom)
+}
+
+/** 宿主设置面板是否打开：设置触发按钮（sidebar.settings slot）的 aria-expanded
+ *  （与皮肤检测设置的信号相同）。设置模态（VOzbGW_overlay，fixed z-1000）挂在
+ *  侧边栏子树内而非 body portal，z-1000 被受限层叠上下文困在 body 层编辑器之下
+ *  ——打开期间编辑器外壳只能整体让位（display:none，状态保留）。 */
+function settingsOpen(): boolean {
+  return document.querySelector("[data-slot='sidebar.settings'] [aria-expanded='true']") !== null
+}
+
+/** 编辑区/聊天手柄的顶部偏移：原生标题栏下缘与皮肤顶部装饰带下缘取较大值。
+ *  原生标题栏（无边框窗口的自绘标题栏行，如「DSH Desktop v2.0.3」）四级探测，
+ *  全不中返回 0（= 顶到窗口顶部，浏览器模式原行为）：
  *  ① WCO API（桌面无边框窗口的权威值，皮肤同款测量）；
  *  ② DOM 标题栏元素（i 忽略大小写——CSS 属性选择器区分大小写，驼峰类名
  *     如 titleBar 用小写匹配会落空）；
  *  ③ 探针：在 workbench 顶部取一点，elementsFromPoint 返回被盖住的下层元素
  *     堆栈，跳过 workbench 自身后遇到的第一个条带状元素即原生标题栏（完全不
- *     依赖类名特征）；
+ *     依赖类名特征；pointer-events:none 的装饰带不参与命中，由 skinTopTrimInset 单独算）；
  *  ④ sidebar 元素顶部兜底（与 workbench 同属 frame 内容行，必然在标题栏下方）。 */
 function nativeTopInset(probeX: number): number {
+  let inset = 0
   const overlay = wco()
   if (overlay !== undefined && overlay.isVisible) {
     const rect = overlay.getTitlebarAreaRect()
     if (rect !== null && rect.height > 0 && rect.bottom > 0 && rect.bottom < window.innerHeight) {
-      return Math.round(rect.bottom)
+      inset = Math.round(rect.bottom)
     }
   }
-  const titlebar = document.querySelector<HTMLElement>('[class*="titlebar" i]')
-  if (titlebar !== null) {
-    const rect = titlebar.getBoundingClientRect()
-    if (rect.height > 0 && rect.bottom > 0 && rect.bottom < window.innerHeight) return Math.round(rect.bottom)
-  }
-  for (const el of document.elementsFromPoint(probeX, 6)) {
-    if (workbenchHost !== null && (el === workbenchHost || workbenchHost.contains(el))) continue
-    if (el.tagName === 'HTML' || el.tagName === 'BODY') continue
-    const rect = el.getBoundingClientRect()
-    // 条带状：有明显高度（>8px）但远不满屏（≤200px），且位于窗口上半部
-    if (rect.height >= 8 && rect.height <= 200 && rect.bottom > 0 && rect.bottom < window.innerHeight / 2) {
-      return Math.round(rect.bottom)
+  if (inset === 0) {
+    const titlebar = document.querySelector<HTMLElement>('[class*="titlebar" i]')
+    if (titlebar !== null) {
+      const rect = titlebar.getBoundingClientRect()
+      if (rect.height > 0 && rect.bottom > 0 && rect.bottom < window.innerHeight) inset = Math.round(rect.bottom)
     }
   }
-  const sidebar = document.querySelector<HTMLElement>('[class*="sidebarCol"]')
-  if (sidebar !== null) {
-    const top = sidebar.getBoundingClientRect().top
-    if (top > 0 && top < window.innerHeight) return Math.round(top)
+  if (inset === 0) {
+    for (const el of document.elementsFromPoint(probeX, 6)) {
+      if (workbenchHost !== null && (el === workbenchHost || workbenchHost.contains(el))) continue
+      if (el.tagName === 'HTML' || el.tagName === 'BODY') continue
+      const rect = el.getBoundingClientRect()
+      // 条带状：有明显高度（>8px）但远不满屏（≤200px），且位于窗口上半部
+      if (rect.height >= 8 && rect.height <= 200 && rect.bottom > 0 && rect.bottom < window.innerHeight / 2) {
+        inset = Math.round(rect.bottom)
+        break
+      }
+    }
   }
-  return 0
+  if (inset === 0) {
+    const sidebar = document.querySelector<HTMLElement>('[class*="sidebarCol"]')
+    if (sidebar !== null) {
+      const top = sidebar.getBoundingClientRect().top
+      if (top > 0 && top < window.innerHeight) inset = Math.round(top)
+    }
+  }
+  return Math.max(inset, skinTopTrimInset())
 }
 
 const MIN_CHAT_PX = 440
@@ -134,6 +161,8 @@ export class IdeLayoutController {
   private titlebarObserver: ResizeObserver | null = null
   private titlebarObserved: HTMLElement | null = null
   private wcoGeometryHandler: (() => void) | null = null
+  private settingsObserver: MutationObserver | null = null
+  private settingsObserved: Element | null = null
   private sidebarInjected = false
   private sidebarWidth = 280
   private frameWidth = 0
@@ -166,6 +195,7 @@ export class IdeLayoutController {
         if (sidebar !== null) this.embedSidebarTree(sidebar)
       }
       this.bindTitlebar()
+      this.bindSettingsTrigger()
       this.apply()
     }
     this.waitObserver = new MutationObserver(() => { tryAttach() })
@@ -186,12 +216,28 @@ export class IdeLayoutController {
     this.titlebarObserved = titlebar
   }
 
+  /** 跟踪设置触发按钮的 aria-expanded（设置面板开/关）：变化 → apply() 让位/恢复。
+   *  按钮被宿主重建时自动重绑。选择器与皮肤检测设置的信号一致。 */
+  private bindSettingsTrigger(): void {
+    if (this.settingsObserver === null) {
+      this.settingsObserver = new MutationObserver(() => this.apply())
+    }
+    const trigger = document.querySelector("[data-slot='sidebar.settings'] > :is(button, [role='button'])")
+    if (trigger === null || trigger === this.settingsObserved) return
+    if (this.settingsObserved !== null) this.settingsObserver.disconnect()
+    this.settingsObserver.observe(trigger, { attributes: true, attributeFilter: ['aria-expanded'] })
+    this.settingsObserved = trigger
+  }
+
   /** Create the fixed editor workbench portal host + chat handle. */
   private embedWorkbench(): void {
     if (workbenchHost !== null) return
     const host = document.createElement('div')
     host.dataset.ideWorkbench = ''
-    host.style.cssText = 'position:fixed;top:0;bottom:0;z-index:20;display:flex;flex-direction:row;overflow:hidden;'
+    // z-index:10 = 主内容层（高于主栏内容 auto / 皮肤低层装饰 1~2，低于宿主
+    // overlayLayer 的 z-20——设置页等宿主浮动内容渲染在那层，编辑器必须让位，
+    // 否则同层 20 且 DOM 靠后会盖住设置页）。
+    host.style.cssText = 'position:fixed;top:0;bottom:0;z-index:10;display:flex;flex-direction:row;overflow:hidden;'
       + 'background:var(--dsw-alias-bg-base,#ffffff);'
     document.body.appendChild(host)
     workbenchHost = host
@@ -337,7 +383,9 @@ export class IdeLayoutController {
     el.className = 'ide-chat-handle'
     // 挂在 body 上（fixed），不放在 workbench 内——workbench 有 overflow:hidden，
     // 手柄压在右边界会被裁剪一半，只剩 4px 命中区导致拖不动。
-    el.style.cssText = 'position:fixed;top:0;bottom:0;z-index:40;cursor:col-resize;width:8px;margin-left:-4px;'
+    // z-index 与 workbench 同层（10，主内容层）：宿主浮层（设置页，z-20）打开时
+    // 手柄在其下不抢点击；与 workbench 同 z 靠 DOM 顺序保持在其上方可拖拽。
+    el.style.cssText = 'position:fixed;top:0;bottom:0;z-index:10;cursor:col-resize;width:8px;margin-left:-4px;'
       + 'background:transparent;'
     el.addEventListener('mouseenter', () => { el.style.background = 'rgba(127,127,127,0.35)' })
     el.addEventListener('mouseleave', () => { el.style.background = 'transparent' })
@@ -383,18 +431,22 @@ export class IdeLayoutController {
     // fixed 元素从原生标题栏下方开始（无标题栏 → 0，原行为）。探针 x 取
     // workbench 内左侧一点（编辑区最少 300px 宽，+40 必在 workbench 范围内）。
     const topInset = nativeTopInset(this.sidebarWidth + 40)
+    // 设置面板打开期间整个编辑器外壳让位（display:none，DOM/状态保留，关面板
+    // 后恢复）——设置模态困在侧边栏的受限层叠上下文里，z-index 无解，唯有不渲染。
+    const settings = settingsOpen()
+    const shown = editorVisible && !settings
     if (workbenchHost !== null) {
       workbenchHost.style.top = `${topInset}px`
       workbenchHost.style.left = `${this.sidebarWidth}px`
       workbenchHost.style.width = `${work}px`
-      workbenchHost.style.pointerEvents = editorVisible && work > 0 ? 'auto' : 'none'
-      workbenchHost.style.display = editorVisible ? 'flex' : 'none'
+      workbenchHost.style.pointerEvents = shown && work > 0 ? 'auto' : 'none'
+      workbenchHost.style.display = shown ? 'flex' : 'none'
     }
     if (this.chatHandle !== null) {
       // 手柄挂在 body（fixed），用视口绝对坐标：sidebar 右缘 + 编辑器宽度
       this.chatHandle.style.top = `${topInset}px`
       this.chatHandle.style.left = `${this.sidebarWidth + work}px`
-      this.chatHandle.style.display = editorVisible ? 'block' : 'none'
+      this.chatHandle.style.display = shown ? 'block' : 'none'
     }
   }
 
@@ -407,6 +459,8 @@ export class IdeLayoutController {
     this.footObserver?.disconnect()
     this.titlebarObserver?.disconnect()
     this.titlebarObserved = null
+    this.settingsObserver?.disconnect()
+    this.settingsObserved = null
     if (this.wcoGeometryHandler !== null) {
       wco()?.removeEventListener('geometrychange', this.wcoGeometryHandler)
       this.wcoGeometryHandler = null

@@ -361,7 +361,9 @@ function MessageNav({ sessions }: { sessions: ClientContext['sessions'] }): JSX.
 export function mountMessageNav(ctx: ClientContext): () => void {
   const host = document.createElement('div')
   host.setAttribute('data-ide-message-nav', '')
-  host.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:59;'
+  // z-index:10 = 主内容层（与 workbench 同层），低于宿主 overlayLayer（z-20）：
+  // 设置页等宿主浮动内容打开时导航条在其下让位。
+  host.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:10;'
   document.body.appendChild(host)
 
   let root: Root | undefined
