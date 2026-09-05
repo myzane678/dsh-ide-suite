@@ -13,7 +13,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-slots'
 // 仅类型 import（浏览器纯度门：不 value-import dsh-lsp-core）。
 import type { LspCapabilitiesAccessor } from 'dsh-lsp-core/client'
 import { IdeLayoutController } from './layout.ts'
-import { createStore, IDE_DEFAULT, LAYOUT_DEFAULT, type IdeState } from './store.ts'
+import { createStore, IDE_DEFAULT, LAYOUT_DEFAULT, type EditorTab, type IdeState } from './store.ts'
 import { mountPanels, type IdeMountApi } from './mount.tsx'
 import { subscribeChanges } from './api.ts'
 import { openFileInTabs } from './components/EditorPane.tsx'
@@ -52,17 +52,25 @@ export function apply(ctx: ClientContext): void {
     // 双副本硬崩），lspRegistry 仅供 lspCapabilities 内部查服务器配置。
     const lspCapabilities = (ctx as unknown as LspCapabilitiesAccessor).lspCapabilities
 
+    // 打开文件共用落库：函数式 update，迟到的读取合并进最新 tabs，不覆盖并发
+    // 打开的文件（P1-06），并确保编辑区可见。
+    const updateTabs = (updater: (prev: { tabs: EditorTab[]; activeTabId: string | null }) => { tabs: EditorTab[]; activeTabId: string | null }): void => {
+      ide.update((prev) => {
+        const next = updater({ tabs: prev.tabs, activeTabId: prev.activeTabId })
+        return { ...prev, tabs: next.tabs, activeTabId: next.activeTabId, editorVisible: true }
+      })
+    }
+
     const api: IdeMountApi = {
       ide,
       lspCapabilities,
       openFile: (path: string) => {
-        // P1-06：函数式 update，迟到的读取合并进最新 tabs，不覆盖并发打开的文件。
-        void openFileInTabs(ide.getSnapshot().root, path, (updater) => {
-          ide.update((prev) => {
-            const next = updater({ tabs: prev.tabs, activeTabId: prev.activeTabId })
-            return { ...prev, tabs: next.tabs, activeTabId: next.activeTabId, editorVisible: true }
-          })
-        })
+        void openFileInTabs(ide.getSnapshot().root, path, updateTabs)
+      },
+      // 右键「以预览方式打开」：VS Code 式预览 tab（斜体标题），点击 tab /
+      // 再点文件树该文件 / 开始编辑 → 固定为正式打开（见 openFileInTabs）。
+      openFilePreview: (path: string) => {
+        void openFileInTabs(ide.getSnapshot().root, path, updateTabs, { preview: true })
       },
       // 选中代码 → 追加到当前会话的聊天输入框（draft），由用户确认后发送。
       // 参考 better-sidebar appendToDraft：经 ctx.get('conversation') 懒取服务，

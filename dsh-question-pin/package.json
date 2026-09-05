@@ -1,0 +1,48 @@
+{
+  "name": "dsh-question-pin",
+  "description": "DSH web GUI agent-area top pin: 「这条回答对应哪条提问」置顶条 —— the viewport's first visible message row is resolved back to its user question; when the question is scrolled out of view a capsule bar floats under the conversation header showing its text, click to jump back. Extracted from dsh-ide-layout's QuestionPin into a standalone plugin.",
+  "version": "0.1.0",
+  "packageManager": "pnpm@11.7.0",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./src/*": "./src/*",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [],
+      "platform": "web"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b && tsdown",
+    "prepare": "pnpm build",
+    "watch": "tsdown --watch",
+    "typecheck": "tsc -b --pretty false"
+  },
+  "peerDependencies": {
+    "react": "^18.2.0"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@types/react": "~18.3.1",
+    "@types/react-dom": "^18.3.5",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tsdown": "0.22.2",
+    "typescript": "~5.7.2"
+  },
+  "files": [
+    "lib",
+    "src",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "license": "MIT"
+}

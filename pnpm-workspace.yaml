@@ -1,5 +1,6 @@
 packages:
   - 'dsh-ide-layout'
+  - 'dsh-question-pin'
   - 'dsh-lsp-core'
   - 'dsh-lsp-python'
   - 'dsh-lsp-typescript'

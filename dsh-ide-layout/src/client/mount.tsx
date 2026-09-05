@@ -5,10 +5,12 @@
 
 import { useEffect, useRef, useState, createElement, type JSX, type CSSProperties } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
+import { createPortal } from 'react-dom'
 import type { LspCapabilityService } from 'dsh-lsp-core/client'
 import type { IdeState, ListenerStore } from './store.ts'
 import { FileTree } from './components/FileTree.tsx'
-import { EditorPane } from './components/EditorPane.tsx'
+import { EditorPane, beginDragResize, resizeHandleStyle, Icons } from './components/EditorPane.tsx'
+import { TerminalPane } from './components/TerminalPane.tsx'
 import { GitPanel } from './components/GitPanel.tsx'
 import { ProblemsPanel } from './components/ProblemsPanel.tsx'
 import { BuildOutputDialog } from './components/BuildOutputDialog.tsx'
@@ -99,6 +101,8 @@ function waitForElement(selector: string, onFound: (el: HTMLElement) => void): (
 export interface IdeMountApi {
   ide: ListenerStore<IdeState>
   openFile: (path: string, line?: number) => void
+  /** 右键「以预览方式打开」：VS Code 式预览 tab，点击 tab / 再点文件 / 编辑即固定。 */
+  openFilePreview: (path: string) => void
   /** 把选中代码追加到聊天输入框（发送给内置 agent）。 */
   askAgent: (text: string, path: string) => void
   /** dsh-lsp-core 能力工厂（阶段 1：Python 新链路；未安装时为 undefined）。 */
@@ -264,6 +268,7 @@ function SidebarTree({ api }: { api: IdeMountApi }): JSX.Element {
             root={state.root}
             treeTick={state.treeTick}
             onOpenFile={api.openFile}
+            onOpenFilePreview={api.openFilePreview}
             onBuildProject={() => startBuild('compile')}
             onRunProject={() => startBuild('run')}
           />
@@ -289,20 +294,132 @@ function SidebarTree({ api }: { api: IdeMountApi }): JSX.Element {
   )
 }
 
-/** The editor pane (workbench). */
+/** TermFab 探测不到 Session log 时的写死回退位（贴头部按钮行左侧）。 */
+const TERM_FAB_FALLBACK = { top: 98, right: 178 }
+
+/** 右上角悬浮终端按钮：编辑区与终端**都关闭**时才显示——此时 workbench 整体
+ *  隐藏（原生两栏），tab 栏里的终端图标不可用，入口必须浮在布局之外才常驻。
+ *  portal 到 body（fixed，不挤压布局，半透明 hover 加深）；编辑区打开或终端
+ *  已开时自动隐藏（tab 栏图标 / 面板自带 ✕ 接管，避免重复入口）。
+ *  位置动态对齐 Session log（写死 top/right 的教训：飘带隐藏后头部整体上移，
+ *  写死值错位不再并排）——探测头部按钮行里文本含 Session log 的按钮，垂直
+ *  居中于它、贴其左侧 12px；每次渲染（ide store 变化）+ 窗口 resize 时重测，
+ *  找不到按钮回退写死位。 */
+function TermFab({ api }: { api: IdeMountApi }): JSX.Element | null {
+  const [, force] = useState(0)
+  useEffect(() => api.ide.subscribe(() => force((n) => n + 1)), [api.ide])
+  const state = api.ide.getSnapshot()
+  const [pos, setPos] = useState(TERM_FAB_FALLBACK)
+  useEffect(() => {
+    // 跟随 Session log（**事件驱动，不轮询**）：位置变化的已知信号全接住——
+    // ① 窗口 resize；② 布局插件 apply 完成（侧栏拖动/面板开合/装饰带处理，
+    //    layout.ts 派发 dsh-ide-layout-applied）；③ DOM 变化（头部出现/重建/类
+    //    切换；聊天流式更新也会触发观察，但探测幂等 + rAF 节流 + setPos 浅比
+    //    较，无位置变化零渲染）；④ 字体加载完成。rAF 把同帧多次信号合并成一
+    //    次探测。
+    const probe = (): void => {
+      let target: HTMLElement | null = null
+      for (const button of document.querySelectorAll<HTMLElement>("header[class*='header'] :is(button, [role='button'], a)")) {
+        if (/session\s*log/i.test(button.textContent ?? '')) { target = button; break }
+      }
+      if (target === null) { setPos(TERM_FAB_FALLBACK); return }
+      const rect = target.getBoundingClientRect()
+      if (rect.width <= 0 || rect.height <= 0) { setPos(TERM_FAB_FALLBACK); return }
+      const next = {
+        top: Math.round(rect.top + rect.height / 2 - 16),
+        right: Math.round(window.innerWidth - rect.left + 12),
+      }
+      setPos((prev) => (prev.top === next.top && prev.right === next.right ? prev : next))
+    }
+    let raf = 0
+    const schedule = (): void => {
+      if (raf !== 0) return
+      raf = requestAnimationFrame(() => { raf = 0; probe() })
+    }
+    schedule()
+    window.addEventListener('resize', schedule)
+    window.addEventListener('dsh-ide-layout-applied', schedule)
+    void document.fonts.ready.then(schedule)
+    const observer = new MutationObserver(schedule)
+    observer.observe(document.body, { childList: true, subtree: true })
+    const header = document.querySelector("header[class*='header']")
+    if (header !== null) observer.observe(header, { attributes: true, attributeFilter: ['class', 'style'] })
+    return () => {
+      window.removeEventListener('resize', schedule)
+      window.removeEventListener('dsh-ide-layout-applied', schedule)
+      observer.disconnect()
+      if (raf !== 0) cancelAnimationFrame(raf)
+    }
+  }, [])
+  if (state.editorVisible || state.termVisible) return null
+  return createPortal(
+    <button
+      type="button"
+      title="打开终端"
+      onClick={() => api.ide.update((prev) => ({ ...prev, termVisible: true }))}
+      onMouseEnter={(event) => {
+        const el = event.currentTarget as HTMLElement
+        el.style.background = '#2a3a6e'
+        el.style.borderColor = 'rgba(238, 210, 153, 0.9)'
+      }}
+      onMouseLeave={(event) => {
+        const el = event.currentTarget as HTMLElement
+        el.style.background = '#1f2c55'
+        el.style.borderColor = 'rgba(225, 191, 124, 0.55)'
+      }}
+      style={{
+        // 位置动态对齐 Session log（见组件注释）；回退位仅探测不到时使用。
+        // 配色：深藏蓝实心 + 米白图标 + 金调描边（呼应皮肤深蓝金饰）——
+        // 旧版 14% 透明灰底在浅色背景上几乎隐形（都督反馈「图标不明显」）。
+        position: 'fixed', top: pos.top, right: pos.right, zIndex: 11,
+        width: 32, height: 32, display: 'flex', alignItems: 'center', justifyContent: 'center',
+        padding: 0, border: '1px solid rgba(225, 191, 124, 0.55)', borderRadius: 8,
+        background: '#1f2c55', color: '#f8f3e8',
+        cursor: 'pointer', fontFamily: 'inherit',
+        boxShadow: '0 2px 8px rgba(0,0,0,0.25)',
+      }}
+    >
+      {Icons.terminal}
+    </button>,
+    document.body,
+  )
+}
+
+/** The editor pane (workbench) + independent terminal panel.
+ *  终端面板独立于编辑区（editorVisible || termVisible 任一为真即显示，
+ *  显隐由 layout.ts 联动）：不开编辑区也能开终端（VS Code 底部面板行为）。 */
 function Workbench({ api }: { api: IdeMountApi }): JSX.Element {
   const [, force] = useState(0)
   useEffect(() => api.ide.subscribe(() => force((n) => n + 1)), [api.ide])
   const state = api.ide.getSnapshot()
+  // 终端面板高度（px），顶部手柄可拖拽调整；「立即 fit」触发器：手柄松手时 +1，
+  // TerminalPane 跳过防抖立即 fit+resize。
+  const [termHeight, setTermHeight] = useState(240)
+  const [termFitTick, setTermFitTick] = useState(0)
+  const toggleTerm = (): void => api.ide.update((prev) => ({ ...prev, termVisible: !prev.termVisible }))
   return (
-    <div style={{ display: 'flex', flexDirection: 'row', width: '100%', height: '100%' }}>
-      <div style={{ flex: 1, minWidth: 0, overflow: 'hidden', height: '100%' }}>
-        <EditorPane
-          root={state.root}
-          tabs={state.tabs}
-          activeTabId={state.activeTabId}
-          lspCapabilities={api.lspCapabilities}
-          onActivate={(id) => api.ide.update((prev) => ({ ...prev, activeTabId: id }))}
+    <div style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%' }}>
+      {state.editorVisible && (
+        <div style={{ flex: 1, minWidth: 0, overflow: 'hidden', minHeight: 0 }}>
+          <EditorPane
+            root={state.root}
+            tabs={state.tabs}
+            activeTabId={state.activeTabId}
+            lspCapabilities={api.lspCapabilities}
+            termVisible={state.termVisible}
+            onToggleTerm={toggleTerm}
+            // 预览切换（编辑区顶部眼睛图标）：true = 只读预览（tab 斜体），
+            // false = 源码编辑。preview: undefined 保持字段缺省形态。
+            onSetPreview={(id, preview) => api.ide.update((prev) => ({
+              ...prev,
+              tabs: prev.tabs.map((tab) => tab.id === id ? { ...tab, preview: preview ? true : undefined } : tab),
+            }))}
+          // 点击 tab 激活；目标是预览 tab 时顺带固定为正式打开（点击一下 = 换成源文件格式打开）。
+          onActivate={(id) => api.ide.update((prev) => ({
+            ...prev,
+            activeTabId: id,
+            tabs: prev.tabs.map((tab) => tab.id === id && tab.preview === true ? { ...tab, preview: undefined } : tab),
+          }))}
           onClose={(id) => api.ide.update((prev) => {
             const closing = prev.tabs.find((tab) => tab.id === id)
             // P1-05：dirty tab 关闭前确认，防止未保存内容静默丢弃。
@@ -332,9 +449,11 @@ function Workbench({ api }: { api: IdeMountApi }): JSX.Element {
             }
             return { ...prev, tabs: nextTabs, activeTabId: nextActive, diagnostics }
           })}
+          // 开始编辑即固定（VS Code 行为）：预览态下不会出现 dirty tab，
+          // 也就永远不会被后续预览打开的单例替换误删。
           onContentChange={(id, content) => api.ide.update((prev) => ({
             ...prev,
-            tabs: prev.tabs.map((tab) => tab.id === id ? { ...tab, content, dirty: true } : tab),
+            tabs: prev.tabs.map((tab) => tab.id === id ? { ...tab, content, dirty: true, preview: undefined } : tab),
           }))}
           onDirtySave={(tab) => api.ide.update((prev) => ({
             ...prev,
@@ -363,8 +482,53 @@ function Workbench({ api }: { api: IdeMountApi }): JSX.Element {
             ...prev,
             tabs: prev.tabs.map((item) => item.id === tab.id ? tab : item),
           }))}
-        />
-      </div>
+          />
+        </div>
+      )}
+      {/* 独立终端面板：编辑区开着 = 底部固定高度（手柄可拖）；编辑区关着 = 占满整栏 */}
+      {state.termVisible && (
+        <div style={{
+          ...(state.editorVisible ? { height: termHeight, flexShrink: 0 } : { flex: 1, minHeight: 0 }),
+          position: 'relative',
+          borderTop: '1px solid var(--ide-border,#e5e6eb)',
+          background: 'var(--dsw-alias-bg-base,#ffffff)',
+        }}>
+          {/* 拖拽手柄：上拉=终端变高，下拉=变矮（clamp 120px ~ 视口 70%）；
+              拖拽中直改 DOM（无 React 重渲染 → 不抖），松手同步状态并触发立即 fit */}
+          <div
+            onPointerDown={(event) => beginDragResize(event, 120, window.innerHeight * 0.7, (px) => setTermHeight(px), () => setTermFitTick((t) => t + 1))}
+            title="拖拽调整终端高度"
+            style={resizeHandleStyle()}
+            onMouseEnter={(event) => { (event.currentTarget as HTMLElement).style.background = 'rgba(127,127,127,0.35)' }}
+            onMouseLeave={(event) => { (event.currentTarget as HTMLElement).style.background = 'transparent' }}
+          />
+          <TerminalPane root={state.root} fitTick={termFitTick} />
+          <button
+            type="button"
+            onClick={toggleTerm}
+            title="关闭终端"
+            style={{
+              position: 'absolute', top: 2, right: 6, zIndex: 5,
+              width: 22, height: 22, display: 'flex', alignItems: 'center', justifyContent: 'center',
+              padding: 0, border: 'none', borderRadius: 4, cursor: 'pointer',
+              background: 'transparent', color: '#9ca3af', fontFamily: 'inherit',
+            }}
+            onMouseEnter={(event) => {
+              const el = event.currentTarget as HTMLElement
+              el.style.background = 'rgba(127,127,127,0.16)'
+              el.style.color = 'inherit'
+            }}
+            onMouseLeave={(event) => {
+              const el = event.currentTarget as HTMLElement
+              el.style.background = 'transparent'
+              el.style.color = '#9ca3af'
+            }}
+          >
+            {Icons.close}
+          </button>
+        </div>
+      )}
+      <TermFab api={api} />
     </div>
   )
 }

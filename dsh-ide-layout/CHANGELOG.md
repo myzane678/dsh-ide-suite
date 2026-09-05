@@ -2,6 +2,35 @@
 
 本项目版本与更新记录。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [1.6.0] - 2026-09-05
+
+浮岛卡片化布局（三分区圆角卡 + 绿色气隙 + 立绘镜像窗）+ VS Code 式预览模式 + 终端独立面板 + 十项视觉修复。同仓库新包 `dsh-question-pin`（0.1.0）承接原「这条回答对应哪条提问」置顶条（见「移除」）。
+
+### 新增
+
+- **浮岛卡片化布局**：三分区（侧栏 / agent 卡 / 编辑区）改圆角浮岛卡 + 绿色气隙 + 双立绘镜像窗（character-stage 动态 clip-path）。
+- **VS Code 式预览模式**：文件树右键「以预览方式打开」→ 斜体标题预览 tab（只读、禁保存）；Markdown 文件渲染成文档视图（markdown-it，`html:false` 防注入 + linkify，链接 capture 拦截：http(s) 新窗口打开、其余禁止——DSH 是单页应用，页内导航会冲掉整个 UI）；点击 tab / 再点文件树该文件 / 开始编辑 → 固定为正式打开（tab 合并规则：同路径已存在则激活，预览 tab 顺带固定）。
+- **终端独立面板**：不开编辑区也能开终端（`editorVisible || termVisible` 任一为真即渲染中栏）；顶部手柄可拖拽高度（clamp 120px ~ 视口 70%，拖拽中直改 DOM 不抖）；编辑区与终端都关闭时右上角悬浮钮（TermFab）常驻入口——事件驱动动态对齐 Session log 按钮（resize + `dsh-ide-layout-applied` 布局事件 + MutationObserver + fonts.ready 四信号，rAF 合并，不轮询），深藏蓝实心 + 米白图标 + 金调描边。
+- **编辑区工具栏图标化**：VS Code codicon 观感 16×16 线条图标（预览眼睛 / 保存软盘 / 运行播放 / 终端 / 关闭），hover 背景浮起 + 图标加深，tooltip 带快捷键说明。
+
+### 修复
+
+- **agent 卡四角绿环**：centerCol `box-shadow: 0 0 0 6px`（important）+ `clipPath` 外扩 `inset(-6px round 22px)`（clip-path 裁元素全部绘制输出含自身 box-shadow；盒内等效弧 16px 不变），填「矩形内、圆角弧外」四块月牙。
+- **侧栏气隙带**：新建 sidebarFrame（z8 方角 border 带）填「窗缘↔侧栏」「侧栏↔窗底」缝，与 chatFrame（z9）在侧栏右缘衔接；顶部气隙 borderTop 绿；四角 radial-gradient 反圆角补块（弧内透明、弧外绿）；删 `background-clip: padding-box` 遗产（曾把顶部内弧压成 10px 致上下弧不一致，现四角统一 16px）。侧栏不用 box-shadow（spread 全向会画进标题栏 + 盖皮肤金线三重 shadow）。
+- **会话头部文字染深**：皮肤米白头部文字靠深蓝飘带衬底，隐藏飘带后对比崩——内联染 header `#1f2c55`、次级 counter/caption/meta `#5b6b96`、去 text-shadow（只染 header 本体靠皮肤 color:inherit 传导，保留 hover 金色；dispose 恢复）。
+- **隐藏皮肤纯装饰带**：top-trim（常驻）与 bottom-trim（仅欢迎页停驻，会盖卡底圆角与绿环底段）两条蕾丝饰带隐藏（pointer-events:none + aria-hidden，零功能，dispose 恢复）。
+- **dispose 补全**：centerCol box-shadow、头部 color/text-shadow/次级色、sidebarFrame 自建节点直除。
+
+### 移除
+
+- **「这条回答对应哪条提问」置顶条（QuestionPin）**：剥离为同仓库独立插件 **dsh-question-pin**（0.1.0），本包不再内置（避免两插件同装时渲染双条）。QuestionPin 形态治理成果（单行截断细胶囊 + 锚 `[data-conversation-scroll]` 上缘定位，不压头部不拦点击）随组件带入新插件。
+
+### 版本
+
+dsh-ide-layout 1.5.1 → 1.6.0；dsh-lsp-core / python / typescript / powershell / java / rust 不变；同仓库新增 dsh-question-pin 0.1.0。
+
+> dsh-lsp-powershell 的 vendor tgz 资产无变化，仍使用 v1.0.0 提供的 dsh-lsp-powershell-1.0.0.tgz。
+
 ## [1.5.1] - 2026-08-31
 
 ### 修复

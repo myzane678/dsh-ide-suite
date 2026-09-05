@@ -2,7 +2,33 @@
 
 dsh-ide-suite（monorepo）版本与更新记录，跟随仓库 tag（v0.1.0 起）。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
-v0.x 为 `dsh-ide-layout` 单包时代历史（全历史随 subtree 合入保留）；各子包完整明细见其各自 CHANGELOG：[layout](dsh-ide-layout/CHANGELOG.md) · [core](dsh-lsp-core/CHANGELOG.md) · [python](dsh-lsp-python/CHANGELOG.md) · [typescript](dsh-lsp-typescript/CHANGELOG.md) · [powershell](dsh-lsp-powershell/CHANGELOG.md) · [java](dsh-lsp-java/CHANGELOG.md)。
+v0.x 为 `dsh-ide-layout` 单包时代历史（全历史随 subtree 合入保留）；各子包完整明细见其各自 CHANGELOG：[layout](dsh-ide-layout/CHANGELOG.md) · [question-pin](dsh-question-pin/CHANGELOG.md) · [core](dsh-lsp-core/CHANGELOG.md) · [python](dsh-lsp-python/CHANGELOG.md) · [typescript](dsh-lsp-typescript/CHANGELOG.md) · [powershell](dsh-lsp-powershell/CHANGELOG.md) · [java](dsh-lsp-java/CHANGELOG.md)。
+
+## [1.6.0] - 2026-09-05
+
+浮岛卡片化布局 + VS Code 式预览模式 + 终端独立面板 + 十项视觉修复；「这条回答对应哪条提问」置顶条剥离为独立插件。`dsh-ide-layout` 升级（1.5.1 → 1.6.0），**新增第八包 `dsh-question-pin`（0.1.0）**，其余六包不变。
+
+### 新增
+
+- **浮岛卡片化布局**（dsh-ide-layout）：三分区（侧栏 / agent 卡 / 编辑区）圆角浮岛卡 + 绿色气隙（agent 卡四角绿环、侧栏气隙带、四角反圆角补块，弧度统一 16px）+ 双立绘镜像窗。
+- **VS Code 式预览模式**（dsh-ide-layout）：文件树右键「以预览方式打开」→ 斜体标题预览 tab（只读）；Markdown 渲染文档视图（markdown-it，html:false 防注入 + linkify）；点击 tab / 再点文件 / 开始编辑固定为正式打开。
+- **终端独立面板**（dsh-ide-layout）：不开编辑区可开终端；高度可拖拽；编辑区与终端都关时右上悬浮钮常驻，事件驱动对齐 Session log（四信号 + rAF，不轮询），深藏蓝金描边配色。
+- **编辑区工具栏图标化**（dsh-ide-layout）：VS Code codicon 观感 16×16 线条图标 + hover 浮起 + tooltip 快捷键说明。
+
+### 修复
+
+- agent 卡四角绿环（clipPath 外扩 `inset(-6px round 22px)` 放行 box-shadow）；侧栏气隙带 sidebarFrame + 四角 radial-gradient 补块 + 顶部气隙；删 `background-clip: padding-box` 遗产统一四角 16px 弧。
+- 会话头部文字染深（飘带隐藏后米白字对比崩）；隐藏皮肤 top/bottom-trim 纯装饰带（bottom-trim 仅欢迎页停驻，曾盖卡底圆角）；dispose 恢复补全。
+
+### 移除
+
+- **QuestionPin 置顶条**（dsh-ide-layout）：剥离为独立插件 `dsh-question-pin`（形态治理成果随组件带走），避免两插件同装渲染双条。
+
+### 版本
+
+dsh-ide-layout 1.5.1 → 1.6.0；新增 dsh-question-pin 0.1.0；dsh-lsp-core / python / typescript / powershell / java / rust 不变。
+
+> dsh-lsp-powershell 的 vendor tgz 资产无变化，仍使用 v1.0.0 提供的 dsh-lsp-powershell-1.0.0.tgz。
 
 ## [1.5.1] - 2026-08-31
 

@@ -17,6 +17,8 @@ interface FileTreeProps {
   /** 外部 fs 变更计数器：变化时轻量重载（保留展开），不重挂载组件。 */
   treeTick?: number
   onOpenFile: (path: string) => void
+  /** 右键「以预览方式打开」（仅文件）：VS Code 式预览 tab，点击 tab 固定为正式打开。 */
+  onOpenFilePreview?: (path: string) => void
   /** 右键「🔨 构建项目」（目标为项目标记文件或根时显示）。 */
   onBuildProject?: (relPath: string) => void
   /** 右键「▶ 运行项目」（目标为项目标记文件或根时显示）。 */
@@ -285,7 +287,10 @@ function menuItemsFor(menu: MenuState): MenuItem[] {
   const projectItems: MenuItem[] = isProjectTarget(menu)
     ? [{ id: 'build-project', label: '🔨 构建项目' }, { id: 'run-project', label: '▶ 运行项目' }, 'sep']
     : []
+  // 文件专属首项：以预览方式打开（默认单击仍是正式打开，预览是显式选择）。
+  const previewItems: MenuItem[] = menu.isDir ? [] : [{ id: 'preview-open', label: '以预览方式打开' }, 'sep']
   return [
+    ...previewItems,
     ...projectItems,
     { id: 'reveal', label: '在资源管理器中显示' },
     { id: 'copy-abs', label: '复制路径' },
@@ -298,7 +303,7 @@ function menuItemsFor(menu: MenuState): MenuItem[] {
   ]
 }
 
-export function FileTree({ root, treeTick = 0, onOpenFile, onBuildProject, onRunProject }: FileTreeProps): JSX.Element {
+export function FileTree({ root, treeTick = 0, onOpenFile, onOpenFilePreview, onBuildProject, onRunProject }: FileTreeProps): JSX.Element {
   const [data, setData] = useState<Record<string, LevelData>>({})
   const dataRef = useRef(data)
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
@@ -460,6 +465,8 @@ export function FileTree({ root, treeTick = 0, onOpenFile, onBuildProject, onRun
     setMenu(null)
     if (id === 'reveal') {
       void apiReveal(root, target.path)
+    } else if (id === 'preview-open') {
+      onOpenFilePreview?.(target.path)
     } else if (id === 'build-project') {
       onBuildProject?.(target.path)
     } else if (id === 'run-project') {

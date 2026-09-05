@@ -38,6 +38,9 @@ export interface EditorTab {
   kind?: 'text' | 'image'
   /** 文本编码（host 实际使用的解码/写入编码，如 utf-8 / gb18030）；图片 tab 无。 */
   encoding?: string
+  /** 预览 tab（VS Code 式）：以「预览方式」打开的临时 tab，标题斜体。
+   *  点击该 tab / 文件树再点该文件 / 开始编辑 → 固定为正式打开（字段清除）。 */
+  preview?: boolean
 }
 
 export interface IdeState {
@@ -50,6 +53,9 @@ export interface IdeState {
   /** 编辑区是否可见：默认隐藏（原生两栏：工作区 | agent），
    *  点文件树中的文件时置为 true，关闭按钮可置回 false。 */
   editorVisible: boolean
+  /** 终端面板是否可见：独立于编辑区（不开编辑区也能开终端），
+   *  布局层按 editorVisible || termVisible 决定中栏显隐。 */
+  termVisible: boolean
   /** 文件树刷新计数器：fs 变更时 +1，FileTree 收到后轻量重载（不重挂载组件）。 */
   treeTick: number
   /** Git 面板刷新计数器：与 treeTick 同源（fs 变更 +1），GitPanel 收到后
@@ -66,6 +72,7 @@ export const IDE_DEFAULT: IdeState = {
   tabs: [],
   activeTabId: null,
   editorVisible: false,
+  termVisible: false,
   treeTick: 0,
   gitTick: 0,
   diagnostics: {},

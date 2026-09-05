@@ -2,8 +2,9 @@
  * syntax highlighting, line numbers, bracket matching and code folding
  * (replacing the MVP textarea). */
 
-import { useEffect, useRef, useState, type JSX } from 'react'
+import { useEffect, useMemo, useRef, useState, type JSX } from 'react'
 import { createPortal } from 'react-dom'
+import MarkdownIt from 'markdown-it'
 import { basicSetup } from 'codemirror'
 import { EditorView, GutterMarker, gutter, hoverTooltip, keymap, showTooltip, tooltips, type Tooltip } from '@codemirror/view'
 import { Compartment, Prec, EditorState, StateEffect, StateField, type Extension, type Text } from '@codemirror/state'
@@ -75,7 +76,6 @@ import {
   completionInfo, completionTextRange, completionType, normalizeUri, pathToUri, signatureParameterRange,
   type LspDiagnostic, type LspLocation, type LspPosition, type LspRange, type LspSignatureHelp, type LspTextEdit,
 } from '../lsp-client.ts'
-import { TerminalPane } from './TerminalPane.tsx'
 
 interface EditorPaneProps {
   root: string
@@ -94,6 +94,12 @@ interface EditorPaneProps {
   onDiagnostics: (uri: string, diagnostics: LspDiagnostic[]) => void
   /** 编码切换后以新内容整体替换 tab（content/encoding/mtime/dirty 一起更新）。 */
   onReloadTab: (tab: EditorTab) => void
+  /** 终端面板可见性（状态在 IdeState，独立于编辑区，由 Workbench 层渲染面板）。 */
+  termVisible: boolean
+  /** 终端开关（编辑区 tab 栏图标按钮用）。 */
+  onToggleTerm: () => void
+  /** 预览切换：置/清当前 tab 的 preview 字段（true = 只读预览，false = 源码编辑）。 */
+  onSetPreview: (id: string, preview: boolean) => void
   /** dsh-lsp-core 能力工厂（阶段 1：Python 新链路；缺省 = 未安装，走旧 LspClient）。 */
   lspCapabilities?: LspCapabilityService
 }
@@ -554,6 +560,141 @@ function jumpToDefinition(view: EditorView, props: JumpProps): boolean {
   return true
 }
 
+/** 16×16 线条风格图标（VS Code codicon 观感）：stroke 跟随 currentColor，
+ *  filled=true 时改用填充（播放三角等实心图形）。 */
+function SvgIcon({ children, filled = false }: { children: React.ReactNode; filled?: boolean }): JSX.Element {
+  return (
+    <svg
+      width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"
+      fill={filled ? 'currentColor' : 'none'}
+      stroke={filled ? 'none' : 'currentColor'}
+      strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"
+      style={{ display: 'block' }}
+    >
+      {children}
+    </svg>
+  )
+}
+
+/** 工具栏图标（button 内容）：预览（眼睛）/ 保存（软盘）/ 运行（播放）/
+ *  Blame（分支）/ 终端（>_ 框）/ 关闭（×）。导出供 mount 层悬浮按钮复用。 */
+export const Icons = {
+  preview: (
+    <SvgIcon>
+      <path d="M1.5 8S4.2 3.5 8 3.5 14.5 8 14.5 8 11.8 12.5 8 12.5 1.5 8 1.5 8z" />
+      <circle cx="8" cy="8" r="2" />
+    </SvgIcon>
+  ),
+  save: (
+    <SvgIcon>
+      <path d="M2.5 2.5h8.8l2.2 2.2v8.8H2.5z" />
+      <path d="M5 2.5V6h5V2.5" />
+      <path d="M4.5 13.5v-4h7v4" />
+    </SvgIcon>
+  ),
+  run: (
+    <SvgIcon filled>
+      <path d="M4.5 2.8l8 5.2-8 5.2z" />
+    </SvgIcon>
+  ),
+  blame: (
+    <SvgIcon>
+      <circle cx="4" cy="3.5" r="1.5" />
+      <circle cx="4" cy="12.5" r="1.5" />
+      <circle cx="12" cy="4.5" r="1.5" />
+      <path d="M4 5v6" />
+      <path d="M12 6c0 3.5-8 1.5-8 5" />
+    </SvgIcon>
+  ),
+  terminal: (
+    <SvgIcon>
+      <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" />
+      <path d="M4 6l3 2.5L4 11" />
+      <path d="M8.5 11h3.5" />
+    </SvgIcon>
+  ),
+  close: (
+    <SvgIcon>
+      <path d="M3.5 3.5l9 9" />
+      <path d="M12.5 3.5l-9 9" />
+    </SvgIcon>
+  ),
+}
+
+/** VS Code 式工具栏图标按钮：默认浅灰，hover 背景浮起 + 图标加深；
+ *  停留 ~400ms 在按钮正下方弹出描述框（功能名 + 快捷键，深色小浮层），
+ *  移开即消失。active=true 时图标保持高亮色（开关型按钮的「开着」态）。 */
+function IconButton({ icon, label, hint, active = false, disabled = false, onClick }: {
+  icon: React.ReactNode
+  label: string
+  /** 快捷键等补充说明（tooltip 第二段，弱化色）。 */
+  hint?: string
+  active?: boolean
+  disabled?: boolean
+  onClick?: () => void
+}): JSX.Element {
+  const [hover, setHover] = useState(false)
+  const [tip, setTip] = useState<{ x: number; y: number } | null>(null)
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const btnRef = useRef<HTMLButtonElement | null>(null)
+  const clearTimer = (): void => {
+    if (timer.current !== undefined) { clearTimeout(timer.current); timer.current = undefined }
+  }
+  const onEnter = (): void => {
+    setHover(true)
+    if (disabled) return
+    clearTimer()
+    timer.current = setTimeout(() => {
+      const rect = btnRef.current?.getBoundingClientRect()
+      if (rect !== undefined) setTip({ x: rect.left + rect.width / 2, y: rect.bottom + 6 })
+    }, 400)
+  }
+  const onLeave = (): void => {
+    setHover(false)
+    clearTimer()
+    setTip(null)
+  }
+  useEffect(() => clearTimer, [])
+  return (
+    <>
+      <button
+        ref={btnRef}
+        type="button"
+        disabled={disabled}
+        onClick={onClick}
+        onMouseEnter={onEnter}
+        onMouseLeave={onLeave}
+        style={{
+          width: 28, height: 24, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
+          padding: 0, border: 'none', borderRadius: 4, fontFamily: 'inherit',
+          cursor: disabled ? 'default' : 'pointer',
+          background: hover && !disabled ? 'rgba(127,127,127,0.16)' : 'transparent',
+          color: disabled ? '#d1d5db' : active ? 'var(--ide-hl-keyword, #0000FF)' : hover ? 'inherit' : '#9ca3af',
+        }}
+      >
+        {icon}
+      </button>
+      {tip !== null && createPortal(
+        <div
+          style={{
+            position: 'fixed', left: Math.max(60, Math.min(tip.x, window.innerWidth - 60)),
+            top: tip.y, transform: 'translateX(-50%)',
+            zIndex: 2147483000, pointerEvents: 'none',
+            padding: '4px 9px', borderRadius: 4, whiteSpace: 'nowrap',
+            background: 'rgba(30,30,30,0.95)', color: '#f3f4f6',
+            border: '1px solid rgba(127,127,127,0.3)', boxShadow: '0 4px 14px rgba(0,0,0,0.3)',
+            fontSize: 12, fontFamily: 'inherit',
+          }}
+        >
+          {label}
+          {hint !== undefined && <span style={{ color: '#9ca3af', marginLeft: 8 }}>{hint}</span>}
+        </div>,
+        document.body,
+      )}
+    </>
+  )
+}
+
 /** 菜单按钮统一样式（与皮肤 overlay 变量配套）。 */
 function menuItemStyle(): React.CSSProperties {
   return {
@@ -802,6 +943,78 @@ function ImagePreview({ tab }: { tab: EditorTab }): JSX.Element {
   )
 }
 
+/** 判断文件是否 Markdown：预览态渲染成文档视图（其余文件预览 = 只读源码）。 */
+function isMarkdownPath(path: string): boolean {
+  return /\.(md|markdown|mdown|mkd)$/i.test(path)
+}
+
+/** Markdown 渲染样式（VS Code 预览观感）：作用域 .dsh-md，一次注入。
+ *  颜色走 ide-hl/alias 变量（暗色皮肤自动跟随），回退亮色值。 */
+const MARKDOWN_CSS = `
+.dsh-md { font-size: 14px; line-height: 1.75; color: var(--ide-hl-base, #24292e); word-wrap: break-word; }
+.dsh-md h1, .dsh-md h2, .dsh-md h3, .dsh-md h4, .dsh-md h5, .dsh-md h6 { margin: 1em 0 0.5em; font-weight: 600; line-height: 1.4; }
+.dsh-md h1:first-child, .dsh-md h2:first-child, .dsh-md h3:first-child { margin-top: 0; }
+.dsh-md h1 { font-size: 1.7em; border-bottom: 1px solid rgba(127,127,127,0.25); padding-bottom: 0.3em; }
+.dsh-md h2 { font-size: 1.35em; border-bottom: 1px solid rgba(127,127,127,0.25); padding-bottom: 0.3em; }
+.dsh-md h3 { font-size: 1.15em; }
+.dsh-md h4, .dsh-md h5, .dsh-md h6 { font-size: 1em; }
+.dsh-md p { margin: 0.5em 0; }
+.dsh-md ul, .dsh-md ol { margin: 0.4em 0; padding-left: 1.7em; }
+.dsh-md li { margin: 0.2em 0; }
+.dsh-md li > p { margin: 0.2em 0; }
+.dsh-md code { background: rgba(127,127,127,0.16); padding: 0.15em 0.4em; border-radius: 3px; font-family: "Cascadia Code", Consolas, monospace; font-size: 0.88em; }
+.dsh-md pre { background: rgba(127,127,127,0.11); border: 1px solid rgba(127,127,127,0.15); padding: 10px 12px; border-radius: 6px; overflow: auto; line-height: 1.6; }
+.dsh-md pre code { background: transparent; padding: 0; border-radius: 0; }
+.dsh-md blockquote { margin: 0.6em 0; padding: 0 1em; color: #6b7280; border-left: 3px solid rgba(127,127,127,0.45); }
+.dsh-md table { border-collapse: collapse; margin: 0.8em 0; display: block; overflow: auto; }
+.dsh-md th, .dsh-md td { border: 1px solid rgba(127,127,127,0.35); padding: 4px 11px; }
+.dsh-md th { background: rgba(127,127,127,0.12); font-weight: 600; }
+.dsh-md a { color: var(--ide-accent, #2563eb); text-decoration: none; }
+.dsh-md a:hover { text-decoration: underline; }
+.dsh-md hr { border: none; border-top: 1px solid rgba(127,127,127,0.3); margin: 1.2em 0; }
+.dsh-md img { max-width: 100%; }
+`
+
+let markdownCssInjected = false
+function ensureMarkdownCss(): void {
+  if (markdownCssInjected) return
+  markdownCssInjected = true
+  const style = document.createElement('style')
+  style.setAttribute('data-ide-md-css', '')
+  style.textContent = MARKDOWN_CSS
+  document.head.appendChild(style)
+}
+
+// 模块级单例：html:false = 文档里的原始 HTML 标签一律转义为纯文本（防注入），
+// linkify = 自动把裸 URL 变链接。markdown-it 内置 link 方案过滤（javascript: 等）。
+const mdRenderer = new MarkdownIt({ html: false, linkify: true })
+
+/** Markdown 渲染预览（VS Code 式）：预览态把 .md 渲染成文档视图（标题/列表/
+ *  表格/代码块），点眼睛图标/标签页切回源码。链接点击在 capture 拦截：
+ *  http(s) 新窗口打开，其余一律禁止——DSH 是单页应用，页内导航会冲掉整个 UI。 */
+function MarkdownPreview({ tab }: { tab: EditorTab }): JSX.Element {
+  const html = useMemo(() => mdRenderer.render(tab.content), [tab.content])
+  useEffect(() => { ensureMarkdownCss() }, [])
+  return (
+    <div
+      className="dsh-md"
+      onClickCapture={(event) => {
+        const anchor = (event.target as HTMLElement | null)?.closest('a') ?? null
+        if (anchor === null) return
+        event.preventDefault()
+        event.stopPropagation()
+        const href = anchor.getAttribute('href') ?? ''
+        if (/^https?:/i.test(href)) window.open(href, '_blank', 'noopener')
+      }}
+      style={{
+        flex: 1, minHeight: 0, overflow: 'auto', padding: '16px 26px 40px',
+        background: 'var(--dsw-alias-bg-base,#ffffff)',
+      }}
+      dangerouslySetInnerHTML={{ __html: html }}
+    />
+  )
+}
+
 /** One CodeMirror instance per tab. The parent remounts this component via
  * `key={tab.id}` on tab switch; the view is created once on mount and
  * destroyed on unmount (non-controlled: doc flows out via updateListener). */
@@ -958,7 +1171,8 @@ function CodeMirrorPane({ tab, onContentChange, onSave, onContextAction, onResta
           '&.cm-focused': { outline: 'none' },
         }),
         // P1-04：截断文件只读（readOnly 扩展禁止编辑与输入）。
-        ...(propsRef.current.tab.truncated === true
+        // 预览 tab 同理：只读预览（可看不可改），点图标/标签页切回源码编辑。
+        ...((propsRef.current.tab.truncated === true || propsRef.current.tab.preview === true)
           ? [EditorState.readOnly.of(true), EditorView.editable.of(false)]
           : []),
         Prec.highest(keymap.of([
@@ -1236,6 +1450,14 @@ function CodeMirrorPane({ tab, onContentChange, onSave, onContextAction, onResta
           ⚠ 文件过大已截断显示（只读，禁止保存，防止覆盖尾部内容）
         </div>
       )}
+      {tab.preview === true && (
+        <div style={{
+          flexShrink: 0, padding: '4px 10px', fontSize: 12, color: '#1d4ed8',
+          background: 'rgba(79,140,255,0.1)', borderBottom: '1px solid rgba(79,140,255,0.3)',
+        }}>
+          👁 预览模式（只读）——点击右上角眼睛图标、本标签页或文件树中的文件返回编辑
+        </div>
+      )}
       <div
         ref={hostRef}
         style={{ flex: 1, minHeight: 0, overflow: 'hidden', ['--ide-editor-font-size' as string]: `${fontSize}px` }}
@@ -1452,7 +1674,7 @@ async function writeClipboard(text: string): Promise<boolean> {
  * - 松手：onCommit(最终 px) 同步回 React 状态（供持久化），onDragEnd 回调一次
  *   （终端用它触发「立即 fit」）。
  */
-function beginDragResize(
+export function beginDragResize(
   event: React.PointerEvent<HTMLElement>,
   min: number,
   max: number,
@@ -1475,7 +1697,11 @@ function beginDragResize(
   const startHeight = target.getBoundingClientRect().height
   const onMove = (moveEvent: PointerEvent): void => {
     const next = Math.max(min, Math.min(startHeight + (startY - moveEvent.clientY), max))
-    // 原生 DOM 直改：无 React 重渲染、无整树布局抖动
+    // 原生 DOM 直改：无 React 重渲染、无整树布局抖动。
+    // flex:'none' 必须同步写：容器若处于 flex:1 拉伸态（如「只开终端」时终端
+    // 占满整栏），height 会被 flex 拉伸覆盖 → 拖拽完全不动；解除拉伸后 height
+    // 才是有效尺寸。
+    target.style.flex = 'none'
     target.style.height = `${next}px`
   }
   const onEnd = (): void => {
@@ -1504,7 +1730,7 @@ function beginDragResize(
 }
 
 /** 面板顶部拖拽手柄的通用渲染（内联样式）。 */
-function resizeHandleStyle(): React.CSSProperties {
+export function resizeHandleStyle(): React.CSSProperties {
   return {
     position: 'absolute',
     top: -4,
@@ -1518,18 +1744,13 @@ function resizeHandleStyle(): React.CSSProperties {
 }
 
 export function EditorPane({
-  root, tabs, activeTabId, onActivate, onClose, onContentChange, onDirtySave, onCloseEditor, onAskAgent, onOpenFile, onDiagnostics, onReloadTab, lspCapabilities,
+  root, tabs, activeTabId, onActivate, onClose, onContentChange, onDirtySave, onCloseEditor, onAskAgent, onOpenFile, onDiagnostics, onReloadTab, termVisible, onToggleTerm, onSetPreview, lspCapabilities,
 }: EditorPaneProps): JSX.Element {
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? null
   const [status, setStatus] = useState('')
   const [output, setOutput] = useState<RunOutput | null>(null)
-  const [termVisible, setTermVisible] = useState(false)
-  // 终端面板高度（px），顶部手柄可拖拽调整
-  const [termHeight, setTermHeight] = useState(240)
   // 运行输出面板高度（px），同样可拖拽
   const [outputHeight, setOutputHeight] = useState(200)
-  // 终端「立即 fit」触发器：手柄松手时 +1，TerminalPane 跳过防抖立即 fit+resize
-  const [termFitTick, setTermFitTick] = useState(0)
   // LSP（阶段 2 统一链路）：会话由 dsh-lsp-core lspCapabilities 按 (root, 会话组)
   // 管理——lspFor 打开文件时 acquire，这里的 state 只承载诊断缓存与状态展示。
   // Java LSP 是可选能力，本机无 JDTLS 时纯高亮降级。
@@ -1692,6 +1913,13 @@ export function EditorPane({
       saveTimer.current = setTimeout(() => setStatus(''), 2500)
       return false
     }
+    // 预览 tab 只读，禁止保存（先点眼睛图标切回源码编辑再保存）。
+    if (tab.preview === true) {
+      setStatus('⚠ 预览模式只读，切回源码编辑后再保存')
+      if (saveTimer.current !== undefined) clearTimeout(saveTimer.current)
+      saveTimer.current = setTimeout(() => setStatus(''), 2500)
+      return false
+    }
     // P1-04：截断文件只读，禁止保存（防尾部数据被覆盖丢失）。
     if (tab.truncated === true) {
       setStatus(`⚠ ${tab.path} 过大已被截断，只读不可保存`)
@@ -1724,6 +1952,12 @@ export function EditorPane({
     if (activeTab === null || output?.state === 'running') return
     if (activeTab.kind === 'image') {
       setStatus('图片为只读预览，不可运行')
+      if (saveTimer.current !== undefined) clearTimeout(saveTimer.current)
+      saveTimer.current = setTimeout(() => setStatus(''), 2500)
+      return
+    }
+    if (activeTab.preview === true) {
+      setStatus('预览模式只读，切回源码编辑后再运行')
       if (saveTimer.current !== undefined) clearTimeout(saveTimer.current)
       saveTimer.current = setTimeout(() => setStatus(''), 2500)
       return
@@ -1820,8 +2054,10 @@ export function EditorPane({
               borderRight: '1px solid var(--ide-border, #e5e6eb)',
               background: tab.id === activeTabId ? 'var(--ide-tab-active, #ffffff)' : 'transparent',
               color: tab.id === activeTabId ? 'inherit' : '#6b7280',
+              // 预览 tab：标题斜体（VS Code 惯例），点击即固定为正式打开。
+              fontStyle: tab.preview === true ? 'italic' : 'normal',
             }}
-            title={tab.path}
+            title={tab.preview === true ? `${tab.path}\n预览中：点击本标签固定为正式打开` : tab.path}
           >
             <span>{tab.dirty ? '● ' : ''}{tabTitle(tab.path)}</span>
             <span
@@ -1832,73 +2068,50 @@ export function EditorPane({
             </span>
           </div>
         ))}
-        {/* 右侧按钮组：保存 | 终端 | 运行 | 关闭编辑区 */}
-        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8, paddingRight: 8, flexShrink: 0 }}>
-          <button
+        {/* 右侧图标按钮组：预览切换 | 保存 | 运行 | Blame | 终端 | 关闭编辑区
+            （VS Code 式：图标省空间，悬停背景加深 + 下方弹出描述框） */}
+        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 2, paddingRight: 8, flexShrink: 0 }}>
+          <IconButton
+            icon={Icons.preview}
+            label={activeTab !== null && activeTab.preview === true
+              ? '以源文件格式打开（编辑）'
+              : activeTab !== null && isMarkdownPath(activeTab.path)
+                ? '以预览方式打开（渲染视图）'
+                : '以预览方式打开（只读）'}
+            disabled={activeTab === null || activeTab.kind === 'image' || activeTab.dirty}
+            active={activeTab !== null && activeTab.preview === true}
+            onClick={() => { if (activeTab !== null) onSetPreview(activeTab.id, activeTab.preview !== true) }}
+          />
+          <IconButton
+            icon={Icons.save}
+            label="保存"
+            hint="Ctrl+S"
+            disabled={activeTab === null || !activeTab.dirty || activeTab.kind === 'image' || activeTab.preview === true}
             onClick={() => { if (activeTab !== null) requestSave(activeTab) }}
-            disabled={activeTab === null || !activeTab.dirty || activeTab.kind === 'image'}
-            title={activeTab === null ? '先打开一个文件' : activeTab.kind === 'image' ? '图片为只读预览，不可保存' : activeTab.dirty ? `保存 ${activeTab.path}（Ctrl+S）` : '没有未保存的更改'}
-            style={{
-              padding: '4px 10px', fontSize: 12,
-              cursor: activeTab !== null && activeTab.dirty && activeTab.kind !== 'image' ? 'pointer' : 'default',
-              color: activeTab !== null && activeTab.dirty && activeTab.kind !== 'image' ? '#16a34a' : '#9ca3af',
-              background: 'transparent', border: '1px solid var(--ide-border,#e5e6eb)',
-              borderRadius: 4, whiteSpace: 'nowrap',
-            }}
-          >
-            💾 保存
-          </button>
-          <button
-            onClick={() => setTermVisible((visible) => !visible)}
-            title="终端（显示/隐藏底部终端面板）"
-            style={{
-              padding: '4px 10px', fontSize: 12, cursor: 'pointer',
-              color: termVisible ? 'var(--ide-hl-keyword, #0000FF)' : '#9ca3af',
-              background: 'transparent', border: '1px solid var(--ide-border,#e5e6eb)',
-              borderRadius: 4, whiteSpace: 'nowrap',
-            }}
-          >
-            {termVisible ? '▣ 终端' : '▢ 终端'}
-          </button>
-          <button
+          />
+          <IconButton
+            icon={Icons.run}
+            label={output?.state === 'running' ? '运行中…' : '运行当前文件'}
+            disabled={activeTab === null || output?.state === 'running' || activeTab.kind === 'image' || activeTab.preview === true}
             onClick={() => { void runActive() }}
-            disabled={activeTab === null || output?.state === 'running' || activeTab.kind === 'image'}
-            title={activeTab === null ? '先打开一个文件' : activeTab.kind === 'image' ? '图片为只读预览，不可运行' : `运行 ${activeTab.path}`}
-            style={{
-              padding: '4px 10px', fontSize: 12,
-              cursor: activeTab === null || activeTab.kind === 'image' ? 'default' : 'pointer',
-              color: activeTab === null || activeTab.kind === 'image' ? '#9ca3af' : 'var(--ide-hl-keyword, #0000FF)',
-              background: 'transparent', border: '1px solid var(--ide-border,#e5e6eb)',
-              borderRadius: 4, whiteSpace: 'nowrap',
-            }}
-          >
-            {output?.state === 'running' ? '⏳ 运行中…' : '▶ 运行'}
-          </button>
-          <button
+          />
+          <IconButton
+            icon={Icons.blame}
+            label={blameEnabled ? '关闭行内 blame（每行提交标注）' : '开启行内 blame（每行显示 提交hash + 作者，悬停看详情）'}
+            active={blameEnabled}
             onClick={toggleBlame}
-            title={blameEnabled
-              ? '关闭行内 blame（每行的提交标注）'
-              : '开启行内 blame（每行显示 提交hash + 作者，悬停看详情）'}
-            style={{
-              padding: '4px 10px', fontSize: 12, cursor: 'pointer',
-              color: blameEnabled ? 'var(--ide-hl-keyword, #0000FF)' : '#9ca3af',
-              background: 'transparent', border: '1px solid var(--ide-border,#e5e6eb)',
-              borderRadius: 4, whiteSpace: 'nowrap',
-            }}
-          >
-            {blameEnabled ? '◉ Blame' : '○ Blame'}
-          </button>
-          <button
+          />
+          <IconButton
+            icon={Icons.terminal}
+            label="终端"
+            active={termVisible}
+            onClick={onToggleTerm}
+          />
+          <IconButton
+            icon={Icons.close}
+            label="关闭编辑区"
             onClick={onCloseEditor}
-            title="关闭编辑区"
-            style={{
-              padding: '4px 10px', fontSize: 12, cursor: 'pointer',
-              color: '#9ca3af', background: 'transparent', border: '1px solid var(--ide-border,#e5e6eb)',
-              borderRadius: 4, whiteSpace: 'nowrap',
-            }}
-          >
-            ✕ 关闭编辑区
-          </button>
+          />
         </div>
       </div>
 
@@ -1910,10 +2123,14 @@ export function EditorPane({
           </div>
         ) : activeTab.kind === 'image' ? (
           <ImagePreview tab={activeTab} />
+        ) : isMarkdownPath(activeTab.path) && activeTab.preview === true ? (
+          // Markdown 预览态：渲染成文档视图（标题/列表/表格/代码块）。
+          <MarkdownPreview tab={activeTab} />
         ) : (
           <CodeMirrorPane
-            // key 含编码：切换编码时强制重建（新 content 重新打开；普通编辑不变）。
-            key={`${activeTab.id}::${activeTab.encoding ?? 'utf-8'}`}
+            // key 含编码 + 预览态：切换编码/预览时强制重建（新 content/只读扩展
+            // 重新生效；普通编辑不变）。
+            key={`${activeTab.id}::${activeTab.encoding ?? 'utf-8'}::${activeTab.preview === true ? 'preview' : 'edit'}`}
             tab={activeTab}
             onContentChange={(id, content) => {
               onContentChange(id, content)
@@ -1945,26 +2162,6 @@ export function EditorPane({
               }
             }}
           />
-        )}
-        {termVisible && (
-          <div style={{
-            height: termHeight,
-            flexShrink: 0,
-            position: 'relative',
-            borderTop: '1px solid var(--ide-border,#e5e6eb)',
-            background: 'var(--dsw-alias-bg-base,#ffffff)',
-          }}>
-            {/* 拖拽手柄：上拉=终端变高，下拉=变矮（clamp 120px ~ 视口 70%）；
-                拖拽中直改 DOM（无 React 重渲染 → 不抖），松手同步状态并触发立即 fit */}
-            <div
-              onPointerDown={(event) => beginDragResize(event, 120, window.innerHeight * 0.7, (px) => setTermHeight(px), () => setTermFitTick((t) => t + 1))}
-              title="拖拽调整终端高度"
-              style={resizeHandleStyle()}
-              onMouseEnter={(event) => { (event.currentTarget as HTMLElement).style.background = 'rgba(127,127,127,0.35)' }}
-              onMouseLeave={(event) => { (event.currentTarget as HTMLElement).style.background = 'transparent' }}
-            />
-            <TerminalPane root={root} fitTick={termFitTick} />
-          </div>
         )}
       </div>
 
@@ -2088,7 +2285,7 @@ export function EditorPane({
               })()}
             </>
           ))}
-          <span>{status !== '' ? status : (activeTab !== null ? (activeTab.kind === 'image' ? '图片' : activeTab.dirty ? '未保存' : '已保存') : '')}</span>
+          <span>{status !== '' ? status : (activeTab !== null ? (activeTab.kind === 'image' ? '图片' : activeTab.preview === true ? (isMarkdownPath(activeTab.path) ? 'Markdown 预览' : '预览（只读）') : activeTab.dirty ? '未保存' : '已保存') : '')}</span>
         </span>
       </div>
       {/* 编码选择菜单（状态栏点击编码弹出，选择后以新编码重新加载当前文件）。
@@ -2126,18 +2323,43 @@ export function EditorPane({
   )
 }
 
+/** tab 合并规则：已存在同路径 → 激活；若它是预览 tab 则顺带固定为正式打开
+ *  （文件树再点一下 = 换成源文件格式打开）。不存在 → 追加；预览打开时先
+ *  替换掉旧预览 tab（VS Code 单例预览行为）——dirty 的 tab 一开始编辑即被
+ *  固定，永远不会被替换误删。 */
+function mergeTabIntoState(
+  prev: { tabs: EditorTab[]; activeTabId: string | null },
+  tab: EditorTab,
+): { tabs: EditorTab[]; activeTabId: string | null } {
+  const existing = prev.tabs.find((item) => item.path === tab.path)
+  if (existing !== undefined) {
+    const tabs = existing.preview === true
+      ? prev.tabs.map((item) => item.id === existing.id ? { ...item, preview: undefined } : item)
+      : prev.tabs
+    return { tabs, activeTabId: existing.id }
+  }
+  const tabs = tab.preview === true
+    ? [...prev.tabs.filter((item) => item.preview !== true), tab]
+    : [...prev.tabs, tab]
+  return { tabs, activeTabId: tab.id }
+}
+
 /**
  * Open a file into the editor store (async load).
  * P1-06: uses a functional updater so a late-returning read merges into the
  * latest tab list instead of overwriting newer tabs (fast-open A, B → A's
  * stale snapshot must not drop B). P1-04: a truncated file is opened
  * read-only so the tail cannot be clobbered by a save.
+ * options.preview：以「预览方式」打开（VS Code 式临时 tab，斜体标题）；
+ * 缺省 = 正式打开（默认以源文件格式打开，行为不变）。
  */
 export async function openFileInTabs(
   root: string,
   path: string,
   onUpdate: (updater: (prev: { tabs: EditorTab[]; activeTabId: string | null }) => { tabs: EditorTab[]; activeTabId: string | null }) => void,
+  options?: { preview?: boolean },
 ): Promise<void> {
+  const preview = options?.preview === true
   // 位图图片：按二进制读取（base64 data URL），编辑器内做只读预览，不走文本解码。
   if (isImagePath(path)) {
     const binary = await apiReadBinary(root, path)
@@ -2151,12 +2373,9 @@ export async function openFileInTabs(
       savedMtime: binary.value.mtime,
       truncated: false,
       kind: 'image',
+      ...(preview ? { preview: true } : {}),
     }
-    onUpdate((prev) => {
-      const existing = prev.tabs.find((item) => item.path === path)
-      if (existing !== undefined) return { tabs: prev.tabs, activeTabId: existing.id }
-      return { tabs: [...prev.tabs, tab], activeTabId: tab.id }
-    })
+    onUpdate((prev) => mergeTabIntoState(prev, tab))
     return
   }
   const result = await apiRead(root, path)
@@ -2172,11 +2391,7 @@ export async function openFileInTabs(
     truncated,
     kind: 'text',
     encoding: result.value.encoding ?? 'utf-8',
+    ...(preview ? { preview: true } : {}),
   }
-  onUpdate((prev) => {
-    // 已存在（并发打开同一文件）→ 只激活不覆盖。
-    const existing = prev.tabs.find((item) => item.path === path)
-    if (existing !== undefined) return { tabs: prev.tabs, activeTabId: existing.id }
-    return { tabs: [...prev.tabs, tab], activeTabId: tab.id }
-  })
+  onUpdate((prev) => mergeTabIntoState(prev, tab))
 }

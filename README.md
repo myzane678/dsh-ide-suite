@@ -1,18 +1,21 @@
 # dsh-ide-suite
 
 [![CI](https://github.com/myzane678/dsh-ide-suite/actions/workflows/ci.yml/badge.svg)](https://github.com/myzane678/dsh-ide-suite/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-1.5.1-blue)](https://github.com/myzane678/dsh-ide-suite/releases)
+[![Version](https://img.shields.io/badge/version-1.6.0-blue)](https://github.com/myzane678/dsh-ide-suite/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D22-green)](https://nodejs.org)
 [![pnpm](https://img.shields.io/badge/pnpm-%3E%3D11-orange)](https://pnpm.io)
 [![Tests](https://img.shields.io/badge/tests-143%20passed-brightgreen)](#开发)
 
-DSH（DeepSeek Harness）Web GUI 的 IDE 插件套件（monorepo，pnpm workspace）：**编辑器外壳 + LSP 基础设施 + 六语言插件**。v1.5.1——设置面板打开时编辑器让位 + 编辑器降为主内容层（z-10）+ 顶部避开皮肤装饰带。新增一种语言的 LSP 支持 = 新增一个插件，编辑器零改动。
+DSH（DeepSeek Harness）Web GUI 的 IDE 插件套件（monorepo，pnpm workspace）：**编辑器外壳 + 会话置顶条 + LSP 基础设施 + 六语言插件**。v1.6.0——浮岛卡片化布局 + VS Code 式预览（含 Markdown 渲染）+ 终端独立面板 + 置顶条独立插件。新增一种语言的 LSP 支持 = 新增一个插件，编辑器零改动。
 
 ## 功能特性
 
 ### 编辑器（CodeMirror 6，`dsh-ide-layout`）
 
+- 浮岛卡片化布局：三分区（侧栏 / agent 卡 / 编辑区）圆角浮岛卡 + 绿色气隙 + 立绘镜像窗
+- VS Code 式预览：右键「以预览方式打开」斜体预览 tab（只读），Markdown 渲染文档视图（防注入渲染）；点击 tab / 再点文件 / 开始编辑固定为正式打开
+- 终端独立面板：不开编辑区可开终端（高度可拖拽）；编辑区与终端都关时右上悬浮终端钮常驻，动态对齐 Session log
 - 语法高亮 23 种语言/格式；行号、代码折叠、状态栏（语言 / 行列 / 诊断数 / LSP 状态）
 - LSP 智能能力：自动补全、诊断波浪线、悬停提示、签名提示、F12 / Ctrl+点击 跳转定义、F2 重命名、Shift+Alt+F 格式化、右键快速修复
 - Tab / Shift+Tab 缩进（无补全时，多行整块）；Enter 自动缩进 4 空格（VS Code 习惯）
@@ -38,6 +41,7 @@ DSH（DeepSeek Harness）Web GUI 的 IDE 插件套件（monorepo，pnpm workspac
 | 包 | 职责 |
 |---|---|
 | `dsh-ide-layout` | 编辑器外壳（文件树 / 编辑器 / 终端 / Git / 问题面板 / 状态栏）——零语言知识，LSP 全部经 `lspCapabilities` |
+| `dsh-question-pin` | 会话置顶条：「这条回答对应哪条提问」——提问滚出视口时 agent 区顶部悬浮提示并可点击跳回（纯浏览器端外挂，可单独安装） |
 | `dsh-lsp-core` | LSP 基础设施：client 语言注册表 + 能力工厂（acquire / languageFor）；host 服务器注册表 + `/dsh-lsp/ws` 桥（commandFor / discover） |
 | `dsh-lsp-python` / `dsh-lsp-typescript` / `dsh-lsp-powershell` / `dsh-lsp-java` / `dsh-lsp-rust` | 语言插件（dual-face：client 注册语言 + host 注册服务器） |
 
@@ -57,19 +61,19 @@ DSH（DeepSeek Harness）Web GUI 的 IDE 插件套件（monorepo，pnpm workspac
 // ~/.dsh/profiles/<profile>/package.json
 {
   "dependencies": {
-    "dsh-ide-layout": "github:myzane678/dsh-ide-suite#v1.5.1",
-    "dsh-lsp-core": "github:myzane678/dsh-ide-suite#v1.5.1",
-    "dsh-lsp-python": "github:myzane678/dsh-ide-suite#v1.5.1",
-    "dsh-lsp-typescript": "github:myzane678/dsh-ide-suite#v1.5.1",
-    "dsh-lsp-java": "github:myzane678/dsh-ide-suite#v1.5.1",
-    "dsh-lsp-rust": "github:myzane678/dsh-ide-suite#v1.5.1",
+    "dsh-ide-layout": "github:myzane678/dsh-ide-suite#v1.6.0",
+    "dsh-lsp-core": "github:myzane678/dsh-ide-suite#v1.6.0",
+    "dsh-lsp-python": "github:myzane678/dsh-ide-suite#v1.6.0",
+    "dsh-lsp-typescript": "github:myzane678/dsh-ide-suite#v1.6.0",
+    "dsh-lsp-java": "github:myzane678/dsh-ide-suite#v1.6.0",
+    "dsh-lsp-rust": "github:myzane678/dsh-ide-suite#v1.6.0",
     // PowerShell 插件用 Release 的 tgz 资产（vendor 不在 git 内）：
     "dsh-lsp-powershell": "https://github.com/myzane678/dsh-ide-suite/releases/download/v1.0.0/dsh-lsp-powershell-1.0.0.tgz"
   },
   "dsh": {
     "profile": {
       "bundles": [
-        "dsh-ide-layout", "dsh-lsp-core", "dsh-lsp-python",
+        "dsh-ide-layout", "dsh-question-pin", "dsh-lsp-core", "dsh-lsp-python",
         "dsh-lsp-typescript", "dsh-lsp-powershell", "dsh-lsp-java"
       ]
     }
@@ -105,6 +109,7 @@ pnpm --filter dsh-lsp-core test     # 单包测试
 ```
 dsh-ide-suite/
 ├── dsh-ide-layout/          # 编辑器外壳（v0.1.0 起的完整历史）
+├── dsh-question-pin/        # 会话置顶条（v1.6.0 起，从 dsh-ide-layout 剥离）
 ├── dsh-lsp-core/            # LSP 基础设施（client 服务 + host 桥）
 ├── dsh-lsp-python/          # 语言插件 × 4（python / typescript / powershell / java）
 │   └── ...
@@ -119,7 +124,7 @@ LSP 拆分工程的设计与分阶段记录：[docs/lsp-split-design.md](docs/ls
 
 ## 更新日志
 
-见 [CHANGELOG.md](CHANGELOG.md)——v0.1.0 → v1.5.1 逐版记录（v0.x 为 `dsh-ide-layout` 并入前历史）。各子包明细见其各自 CHANGELOG。
+见 [CHANGELOG.md](CHANGELOG.md)——v0.1.0 → v1.6.0 逐版记录（v0.x 为 `dsh-ide-layout` 并入前历史）。各子包明细见其各自 CHANGELOG。
 
 ## 跨插件协作约定（贡献必读）
 
