@@ -1,7 +1,7 @@
 {
   "name": "dsh-question-pin",
   "description": "DSH web GUI agent-area top pin: 「这条回答对应哪条提问」置顶条 —— the viewport's first visible message row is resolved back to its user question; when the question is scrolled out of view a capsule bar floats under the conversation header showing its text, click to jump back. Extracted from dsh-ide-layout's QuestionPin into a standalone plugin.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "packageManager": "pnpm@11.7.0",
   "type": "module",
   "main": "lib/index.js",

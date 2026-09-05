@@ -2,6 +2,12 @@
 
 本包版本与更新记录。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.1.1] - 2026-09-06
+
+### 修复
+
+- **置顶条压住宿主设置面板**：设置模态 z-1000 原地渲染在侧栏 DOM 子树内（受限层叠上下文，非 body portal），压不过 body 层 z-12 的置顶条——设置打开时置顶条悬浮在设置界面之上。新增 `useSettingsOpen()`：监听设置触发按钮（`[data-slot='sidebar.settings']`）的 `aria-expanded`（与皮肤/ide-layout 检测设置开合的信号一致，宿主重建触发按钮后自动重绑），**设置打开期间组件不渲染让位，关闭即恢复**（ide-layout v1.5.1 编辑器让位同款方案）。
+
 ## [0.1.0] - 2026-09-05
 
 首个版本。从 dsh-ide-layout 1.5.x `mount.tsx` 的 QuestionPin 组件原样剥离为独立插件（大都督的点子），行为与原版一致：

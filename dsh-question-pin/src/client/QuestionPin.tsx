@@ -51,6 +51,38 @@ function topTrimBottom(): number {
 }
 
 /**
+ * 宿主设置面板是否打开：设置触发按钮（sidebar.settings slot）的 aria-expanded
+ * （与皮肤/ide-layout 检测设置开合的信号一致）。设置模态 z-1000 原地渲染在侧栏
+ * DOM 子树内（受限层叠上下文，非 body portal），压不过 body 层 z-12 的本置顶条
+ * ——设置打开期间组件不渲染让位（ide-layout v1.5.1 编辑器让位同款方案）。
+ * 宿主重建触发按钮后由 rebinder 重新绑定。
+ */
+function useSettingsOpen(): boolean {
+  const [open, setOpen] = useState(false)
+  useEffect(() => {
+    const probe = (): void => {
+      setOpen(document.querySelector("[data-slot='sidebar.settings'] [aria-expanded='true']") !== null)
+    }
+    let observed: Element | null = null
+    const observer = new MutationObserver(probe)
+    const rebinder = new MutationObserver(() => {
+      const trigger = document.querySelector("[data-slot='sidebar.settings'] > :is(button, [role='button'])")
+      if (trigger !== null && trigger !== observed) {
+        observed = trigger
+        observer.observe(trigger, { attributes: true, attributeFilter: ['aria-expanded'] })
+      }
+    })
+    rebinder.observe(document.body, { childList: true, subtree: true })
+    probe()
+    return () => {
+      observer.disconnect()
+      rebinder.disconnect()
+    }
+  }, [])
+  return open
+}
+
+/**
  * 「这条回答是回答哪条提问的」置顶条（大都督的点子）：
  * 视口里第一条可见的消息行向前找最近一条用户提问——提问不在视口内时，
  * agent 区顶部（飘带下方）浮现胶囊条显示该提问文本；提问滚进视口则隐藏
@@ -62,6 +94,8 @@ function QuestionPin(): JSX.Element | null {
   const [pin, setPin] = useState<{ text: string; left: number; top: number; width: number } | null>(null)
   const rowRef = useRef<HTMLElement | null>(null)
   const rafRef = useRef(0)
+  // 设置面板打开 → 不渲染（见 useSettingsOpen 注释）
+  const settingsOpen = useSettingsOpen()
 
   const scan = (): void => {
     const topBound = topTrimBottom()
@@ -162,7 +196,7 @@ function QuestionPin(): JSX.Element | null {
     }
   }, [])
 
-  if (pin === null) return null
+  if (pin === null || settingsOpen) return null
   return createPortal(
     <button
       type="button"

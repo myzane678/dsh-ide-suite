@@ -4,6 +4,20 @@ dsh-ide-suite（monorepo）版本与更新记录，跟随仓库 tag（v0.1.0 起
 
 v0.x 为 `dsh-ide-layout` 单包时代历史（全历史随 subtree 合入保留）；各子包完整明细见其各自 CHANGELOG：[layout](dsh-ide-layout/CHANGELOG.md) · [question-pin](dsh-question-pin/CHANGELOG.md) · [core](dsh-lsp-core/CHANGELOG.md) · [python](dsh-lsp-python/CHANGELOG.md) · [typescript](dsh-lsp-typescript/CHANGELOG.md) · [powershell](dsh-lsp-powershell/CHANGELOG.md) · [java](dsh-lsp-java/CHANGELOG.md)。
 
+## [1.6.1] - 2026-09-06
+
+修复 dsh-question-pin 置顶条压住宿主设置面板的问题。仅 `dsh-question-pin` 升级（0.1.0 → 0.1.1），其余七包不变。
+
+### 修复
+
+- **置顶条压住设置面板**（dsh-question-pin）：设置模态 z-1000 原地渲染在侧栏 DOM 子树内（受限层叠上下文，非 body portal），压不过 body 层 z-12 的置顶条。新增 `useSettingsOpen()`——监听设置触发按钮（`[data-slot='sidebar.settings']`）的 `aria-expanded`（与皮肤/ide-layout 检测设置开合的信号一致，宿主重建自动重绑），设置打开期间组件不渲染让位，关闭即恢复（ide-layout v1.5.1 编辑器让位同款方案）。
+
+### 版本
+
+dsh-question-pin 0.1.0 → 0.1.1；dsh-ide-layout / dsh-lsp-core / python / typescript / powershell / java / rust 不变。
+
+> dsh-lsp-powershell 的 vendor tgz 资产无变化，仍使用 v1.0.0 提供的 dsh-lsp-powershell-1.0.0.tgz。
+
 ## [1.6.0] - 2026-09-05
 
 浮岛卡片化布局 + VS Code 式预览模式 + 终端独立面板 + 十项视觉修复；「这条回答对应哪条提问」置顶条剥离为独立插件。`dsh-ide-layout` 升级（1.5.1 → 1.6.0），**新增第八包 `dsh-question-pin`（0.1.0）**，其余六包不变。
