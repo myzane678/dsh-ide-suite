@@ -297,19 +297,22 @@ function SidebarTree({ api }: { api: IdeMountApi }): JSX.Element {
 /** TermFab 探测不到 Session log 时的写死回退位（贴头部按钮行左侧）。 */
 const TERM_FAB_FALLBACK = { top: 98, right: 178 }
 
-/** 右上角悬浮终端按钮：编辑区与终端**都关闭**时才显示——此时 workbench 整体
- *  隐藏（原生两栏），tab 栏里的终端图标不可用，入口必须浮在布局之外才常驻。
- *  portal 到 body（fixed，不挤压布局，半透明 hover 加深）；编辑区打开或终端
- *  已开时自动隐藏（tab 栏图标 / 面板自带 ✕ 接管，避免重复入口）。
+/** 右上角悬浮终端按钮：**会话页** + 编辑区与终端**都关闭**时才显示（都督定案：
+ *  欢迎页还没发生会话，终端入口无意义不出现；编辑区 tab 栏有终端图标、终端
+ *  面板自带 ✕，都轮不到悬浮钮）。「是否在会话页」复用既有探测——头部按钮行
+ *  里的 Session log 按钮只有会话页才有，探测到 = 会话页，探测不到 = 欢迎页
+ *  （此时隐藏，不再回退写死位常驻）。
+ *  portal 到 body（fixed，不挤压布局，hover 加深）。
  *  位置动态对齐 Session log（写死 top/right 的教训：飘带隐藏后头部整体上移，
- *  写死值错位不再并排）——探测头部按钮行里文本含 Session log 的按钮，垂直
- *  居中于它、贴其左侧 12px；每次渲染（ide store 变化）+ 窗口 resize 时重测，
- *  找不到按钮回退写死位。 */
+ *  写死值错位不再并排）——垂直居中于它、贴其左侧 12px；ide store 变化 +
+ *  窗口 resize + DOM 变化时经 rAF 重测。 */
 function TermFab({ api }: { api: IdeMountApi }): JSX.Element | null {
   const [, force] = useState(0)
   useEffect(() => api.ide.subscribe(() => force((n) => n + 1)), [api.ide])
   const state = api.ide.getSnapshot()
   const [pos, setPos] = useState(TERM_FAB_FALLBACK)
+  /** 当前处于会话页：Session log 按钮探测到 = true。欢迎页/头部未渲染 = false。 */
+  const [onSession, setOnSession] = useState(false)
   useEffect(() => {
     // 跟随 Session log（**事件驱动，不轮询**）：位置变化的已知信号全接住——
     // ① 窗口 resize；② 布局插件 apply 完成（侧栏拖动/面板开合/装饰带处理，
@@ -322,9 +325,10 @@ function TermFab({ api }: { api: IdeMountApi }): JSX.Element | null {
       for (const button of document.querySelectorAll<HTMLElement>("header[class*='header'] :is(button, [role='button'], a)")) {
         if (/session\s*log/i.test(button.textContent ?? '')) { target = button; break }
       }
-      if (target === null) { setPos(TERM_FAB_FALLBACK); return }
+      if (target === null) { setPos(TERM_FAB_FALLBACK); setOnSession(false); return }
       const rect = target.getBoundingClientRect()
-      if (rect.width <= 0 || rect.height <= 0) { setPos(TERM_FAB_FALLBACK); return }
+      if (rect.width <= 0 || rect.height <= 0) { setPos(TERM_FAB_FALLBACK); setOnSession(false); return }
+      setOnSession(true)
       const next = {
         top: Math.round(rect.top + rect.height / 2 - 16),
         right: Math.round(window.innerWidth - rect.left + 12),
@@ -351,7 +355,9 @@ function TermFab({ api }: { api: IdeMountApi }): JSX.Element | null {
       if (raf !== 0) cancelAnimationFrame(raf)
     }
   }, [])
-  if (state.editorVisible || state.termVisible) return null
+  // 显示三条件（都督定案）：会话页 + 编辑区关 + 终端关。前一条复用 Session
+  // log 探测信号，后两条沿用原逻辑（tab 栏图标 / 面板 ✕ 接管，避免重复入口）。
+  if (state.editorVisible || state.termVisible || !onSession) return null
   return createPortal(
     <button
       type="button"

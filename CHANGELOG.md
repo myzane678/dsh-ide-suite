@@ -4,6 +4,20 @@ dsh-ide-suite（monorepo）版本与更新记录，跟随仓库 tag（v0.1.0 起
 
 v0.x 为 `dsh-ide-layout` 单包时代历史（全历史随 subtree 合入保留）；各子包完整明细见其各自 CHANGELOG：[layout](dsh-ide-layout/CHANGELOG.md) · [question-pin](dsh-question-pin/CHANGELOG.md) · [core](dsh-lsp-core/CHANGELOG.md) · [python](dsh-lsp-python/CHANGELOG.md) · [typescript](dsh-lsp-typescript/CHANGELOG.md) · [powershell](dsh-lsp-powershell/CHANGELOG.md) · [java](dsh-lsp-java/CHANGELOG.md)。
 
+## [1.7.2] - 2026-09-06
+
+悬浮终端钮会话页显隐：欢迎页（还没发生会话）右上角不再出现悬浮终端钮。仅 `dsh-ide-layout` 升级（1.7.1 → 1.7.2），其余七包不变。
+
+### 变更
+
+- **悬浮终端钮（TermFab）会话页显隐**（dsh-ide-layout）：显示条件从「编辑区关 + 终端关」追加为「**会话页** + 编辑区关 + 终端关」——欢迎页还没发生会话，终端入口无意义不出现（都督需求）。「是否在会话页」复用既有 Session log 按钮探测：探测到 = 会话页（图标贴其左侧出现），探测不到 = 欢迎页/头部未渲染 → 隐藏（不再回退写死位常驻）。编辑区 tab 栏终端图标与终端面板 ✕ 的既有接管逻辑不变。
+
+### 版本
+
+dsh-ide-layout 1.7.1 → 1.7.2；dsh-question-pin / dsh-lsp-core / python / typescript / powershell / java / rust 不变。
+
+> dsh-lsp-powershell 的 vendor tgz 资产无变化，仍使用 v1.0.0 提供的 dsh-lsp-powershell-1.0.0.tgz。
+
 ## [1.7.1] - 2026-09-06
 
 布局净化小包：移除死层立绘镜像窗 + 移除 agent 卡白纱膜 + agent 卡四角亚像素色点修复。仅 `dsh-ide-layout` 升级（1.7.0 → 1.7.1），其余七包不变。
