@@ -1,19 +1,19 @@
 # dsh-ide-suite
 
 [![CI](https://github.com/myzane678/dsh-ide-suite/actions/workflows/ci.yml/badge.svg)](https://github.com/myzane678/dsh-ide-suite/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-1.7.0-blue)](https://github.com/myzane678/dsh-ide-suite/releases)
+[![Version](https://img.shields.io/badge/version-1.7.1-blue)](https://github.com/myzane678/dsh-ide-suite/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D22-green)](https://nodejs.org)
 [![pnpm](https://img.shields.io/badge/pnpm-%3E%3D11-orange)](https://pnpm.io)
 [![Tests](https://img.shields.io/badge/tests-167%20passed-brightgreen)](#开发)
 
-DSH（DeepSeek Harness）Web GUI 的 IDE 插件套件（monorepo，pnpm workspace）：**编辑器外壳 + 会话置顶条 + LSP 基础设施 + 六语言插件**。v1.7.0——edit/write 工具行行级 diff 视图 + agent 写盘后编辑器实时刷新 + 设置面板让位塌陷修复。新增一种语言的 LSP 支持 = 新增一个插件，编辑器零改动。
+DSH（DeepSeek Harness）Web GUI 的 IDE 插件套件（monorepo，pnpm workspace）：**编辑器外壳 + 会话置顶条 + LSP 基础设施 + 六语言插件**。v1.7.1——布局净化：移除死层镜像窗与卡面白纱膜（立绘 100% 原色透出），修复 agent 卡四角亚像素色点。新增一种语言的 LSP 支持 = 新增一个插件，编辑器零改动。
 
 ## 功能特性
 
 ### 编辑器（CodeMirror 6，`dsh-ide-layout`）
 
-- 浮岛卡片化布局：三分区（侧栏 / agent 卡 / 编辑区）圆角浮岛卡 + 绿色气隙 + 立绘镜像窗
+- 浮岛卡片化布局：三分区（侧栏 / agent 卡 / 编辑区）圆角浮岛卡 + 绿色气隙（立绘全透呈现）
 - VS Code 式预览：右键「以预览方式打开」斜体预览 tab（只读），Markdown 渲染文档视图（防注入渲染）；点击 tab / 再点文件 / 开始编辑固定为正式打开
 - 终端独立面板：不开编辑区可开终端（高度可拖拽）；编辑区与终端都关时右上悬浮终端钮常驻，动态对齐 Session log
 - 语法高亮 23 种语言/格式；行号、代码折叠、状态栏（语言 / 行列 / 诊断数 / LSP 状态）
@@ -63,12 +63,12 @@ DSH（DeepSeek Harness）Web GUI 的 IDE 插件套件（monorepo，pnpm workspac
 // ~/.dsh/profiles/<profile>/package.json
 {
   "dependencies": {
-    "dsh-ide-layout": "github:myzane678/dsh-ide-suite#v1.7.0",
-    "dsh-lsp-core": "github:myzane678/dsh-ide-suite#v1.7.0",
-    "dsh-lsp-python": "github:myzane678/dsh-ide-suite#v1.7.0",
-    "dsh-lsp-typescript": "github:myzane678/dsh-ide-suite#v1.7.0",
-    "dsh-lsp-java": "github:myzane678/dsh-ide-suite#v1.7.0",
-    "dsh-lsp-rust": "github:myzane678/dsh-ide-suite#v1.7.0",
+    "dsh-ide-layout": "github:myzane678/dsh-ide-suite#v1.7.1",
+    "dsh-lsp-core": "github:myzane678/dsh-ide-suite#v1.7.1",
+    "dsh-lsp-python": "github:myzane678/dsh-ide-suite#v1.7.1",
+    "dsh-lsp-typescript": "github:myzane678/dsh-ide-suite#v1.7.1",
+    "dsh-lsp-java": "github:myzane678/dsh-ide-suite#v1.7.1",
+    "dsh-lsp-rust": "github:myzane678/dsh-ide-suite#v1.7.1",
     // PowerShell 插件用 Release 的 tgz 资产（vendor 不在 git 内）：
     "dsh-lsp-powershell": "https://github.com/myzane678/dsh-ide-suite/releases/download/v1.0.0/dsh-lsp-powershell-1.0.0.tgz"
   },
@@ -126,7 +126,7 @@ LSP 拆分工程的设计与分阶段记录：[docs/lsp-split-design.md](docs/ls
 
 ## 更新日志
 
-见 [CHANGELOG.md](CHANGELOG.md)——v0.1.0 → v1.7.0 逐版记录（v0.x 为 `dsh-ide-layout` 并入前历史）。各子包明细见其各自 CHANGELOG。
+见 [CHANGELOG.md](CHANGELOG.md)——v0.1.0 → v1.7.1 逐版记录（v0.x 为 `dsh-ide-layout` 并入前历史）。各子包明细见其各自 CHANGELOG。
 
 ## 跨插件协作约定（贡献必读）
 

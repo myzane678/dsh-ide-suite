@@ -159,9 +159,6 @@ const WORKBENCH_CANVAS_COLOR = '#2e9e5b'
 export class IdeLayoutController {
   private frame: HTMLElement | null = null
   private chatHandle: HTMLDivElement | null = null
-  /** 立绘镜像窗（z:-1）：画与 body 背景同源的大图（fixed 视口坐标平移进
-   *  卡盒），圆角裁切——agent 卡的内圆角由它呈现，立绘像素完全清晰。 */
-  private canvasHost: HTMLDivElement | null = null
   /** agent 卡轮廓兼气隙框：外扩 GAP 的粗边框浮层（一体式，替代垫条+补块）。 */
   private chatFrameHost: HTMLDivElement | null = null
   /** 侧栏气隙框：填「窗缘↔侧栏」左缝与「侧栏↔窗底」底缝——chatFrame 只管
@@ -264,41 +261,48 @@ export class IdeLayoutController {
     document.body.appendChild(host)
     workbenchHost = host
 
-    // 立绘镜像窗（治本终版）：body 的大图/立绘画在**窗口背景**上（任何层都
-    // 裁不到它）——agent 卡若透明，立绘必以直角透出。镜像窗 = 一个与 agent 卡
-    // 同尺寸同位置的圆角层，**画与 body 背景同源同参的大图**（视口坐标平移进
-    // 卡盒，像素级对齐）——agent 卡内的立绘以圆角呈现、像素清晰；卡外区域由
-    // 各卡与绿色气隙覆盖。背景图从 body computed style 现场读（自动跟随主题
-    // 亮暗切换），零跨包依赖。几何每次 apply 同步。
-    const canvas = document.createElement('div')
-    canvas.dataset.ideCanvas = ''
-    canvas.style.cssText = 'position:fixed;left:0;top:0;z-index:-1;display:none;overflow:hidden;'
-      + 'border-radius:' + CARD_RADIUS + 'px;'
-    document.body.appendChild(canvas)
-    this.canvasHost = canvas
-
     // agent 区气隙框（窗缘锚定版）：一个 **border = GAP 的实心边框盒**，盒的
     // 右/下缘**直接锚定窗口边缘**——不依赖 centerCol 的右/下位置（margin-right/
     // bottom 在宿主布局下无效、其右/底贴窗缘，任何以外扩/outline 依赖它的方案
     // 都会把填充推出窗外，踩过多轮）。border 带从 agent 卡左/上缘外一直铺到
     // 窗缘：顶、左、右、底四向气隙全部被边框带无条件覆盖；圆角连续（外缘 =
-    // 卡圆角 + GAP）。z:9 压过皮肤背景层；pointer-events 全透；四角月牙由
-    // corner 补块（radial-gradient，z:10）负责。几何每次 apply 实时同步。
+    // 卡圆角 + GAP）。z:9 压过皮肤背景层；pointer-events 全透。几何每次 apply
+    // 实时同步。
     // 右/下缘**直接锚定窗口边缘**（window.innerWidth/innerHeight——绝对可靠，
     // 不依赖 centerCol 的右/下位置——margin-right/bottom 在宿主布局下无效，
     // agent 卡右/底贴窗缘时 outline/外扩算术全部失效（踩过多轮））。border
     // 带从 agent 卡左/上缘外侧一直铺到窗缘：右缝、底缝被无条件填满；左/顶边
-    // 贴 agent 卡左/上缘，与 canvas/seam 衔接。圆角连续（外缘 = 卡圆角+GAP）。
+    // 贴 agent 卡左/上缘，与绿环内缘衔接。圆角连续（外缘 = 卡圆角+GAP）。
     // z:9 压过皮肤背景层；pointer-events 全透；几何每次 apply 实时同步。
     const frame = document.createElement('div')
     frame.dataset.ideChatFrame = ''
     // 方角（不加 border-radius）：卡片自身圆角（内部裁切呈现），气隙**方角铺满**
-    // ——与左侧 canvas 的填充模式一致，四角直角无死角（圆弧补块方案已废弃）。
-    // 边框是**唯一的气隙填充机制**（z9、important——皮肤全局透明规则压不到它，
-    // 已验证显示）：左缝由 border-left-width 动态加宽覆盖（apply 里实测设置）。
+    // ——四角直角无死角。
+    // 边框是气隙填充的主力（z9、important——皮肤全局透明规则压不到它，已验证
+    // 显示）：左缝由 border-left-width 动态加宽覆盖（apply 里实测设置）。
     frame.style.cssText = 'position:fixed;z-index:9;pointer-events:none;display:none;box-sizing:border-box;'
     frame.style.setProperty('border-style', 'solid', 'important')
     frame.style.setProperty('border-color', WORKBENCH_CANVAS_COLOR, 'important')
+    // 四角补弧（治「agent 卡角部亚像素色点」遗留观察项，几何推得）：卡面弧
+    // (R=16)、绿环外弧（=clip 弧 R+GAP=22）、方角 border 带三层在角部的覆盖
+    // 都到不了「卡矩形角点 ↔ 绿环外弧」之间——绿环外弧距角点 16√2−22≈0.6px，
+    // 这条缝露出 body 底色成角部色点（~3px 观感含两侧抗锯齿淡出）。content
+    // 区四角铺 radial-gradient 补块：tile 24px 贴 padding-box 角（= 卡矩形角，
+    // border 带宽动态、padding-box 恰好随 border 走）、圆心 = 卡面弧圆心（角内
+    // 16px）——弧内透明（透下层绿环/卡面）、弧外填绿盖缝。与 sidebarFrame
+    // 补块同构；important 反制皮肤全局透明规则。
+    const ringArc = CARD_RADIUS + CARD_GAP
+    const cornerPatch = (center: string): string =>
+      `radial-gradient(24px at ${center}, transparent ${ringArc - 1}px, ${WORKBENCH_CANVAS_COLOR} ${ringArc - 0.4}px)`
+    frame.style.setProperty('background-image', [
+      cornerPatch('16px 16px'),
+      cornerPatch('calc(100% - 16px) 16px'),
+      cornerPatch('16px calc(100% - 16px)'),
+      cornerPatch('calc(100% - 16px) calc(100% - 16px)'),
+    ].join(', '), 'important')
+    frame.style.setProperty('background-position', 'left top, right top, left bottom, right bottom', 'important')
+    frame.style.setProperty('background-size', '24px 24px', 'important')
+    frame.style.setProperty('background-repeat', 'no-repeat', 'important')
     document.body.appendChild(frame)
     this.chatFrameHost = frame
 
@@ -568,13 +572,11 @@ export class IdeLayoutController {
       // GAP 的绿环——clip-path 裁掉元素全部绘制输出（含自身 box-shadow），
       // inset(0) 时绿环整个落在裁切区外被裁没（本场踩过：四角月牙依旧露底）。
       centerCol.style.clipPath = `inset(-${CARD_GAP}px round ${CARD_RADIUS + CARD_GAP}px)`
-      // agent 卡实体面（**圆角的载体**）：透明卡呈现不出圆角——面必须近乎不
-      // 透明，圆角裁切才有可见形状。97% 浅色近实底、无 blur（不糊）；立绘被
-      // 卡面覆盖（圆角卡的必然代价），嫌闷调低 alpha 即可。
-      // **必须以 important 写入**：皮肤样式表对中栏背景有强制透明规则（立绘
-      // 透出的前提），普通内联会被 !important 压制（踩过：底色画不上、圆角
-      // 无从呈现）——内联 !important 优先级高于样式表 !important。
-      centerCol.style.setProperty('background-color', 'rgba(248, 249, 252, 0.18)', 'important')
+      // 卡面 background-color 已整体移除（都督试调 0.18 → 0.10 → 0.06 后定案
+      // 去膜）：回归皮肤「中栏强制透明」设计态，立绘 100% 原色透出；卡面轮廓
+      // 由绿环/气隙系统独立承担（都督实测调膜期间无其他观感变化，膜只剩雾感）。
+      // 历史兜底：白纱曾承担「文字垫底 + 圆角载体」，头部文字已独立染深、圆角
+      // 由绿环衬出，两职责均已不再依赖卡面。0.06 备份：E:\dsh-plugins\backup-layout.ts.alpha006。
       // 四角月牙补绿（终版）：方角 border 带（chatFrame）只覆盖卡矩形**外**，
       // 卡面被 clipPath round 裁成圆角——「矩形内、圆角弧外」的四块月牙无主，
       // 透出 body 宫殿浅色。扩散阴影沿圆角盒外扩 GAP：内缘自动贴合卡弧（月牙
@@ -629,28 +631,6 @@ export class IdeLayoutController {
       this.chatHandle.style.left = `${this.sidebarWidth + work - CARD_GAP}px`
       this.chatHandle.style.display = shown ? 'block' : 'none'
     }
-    if (this.canvasHost !== null) {
-      // 立绘镜像窗：几何 = centerCol 实际盒子；背景 = 与 body 同源同参的大图
-      // （image 从 body computed style 现场读，size = 视口、position = 负偏移
-      // 把视口坐标平移进卡盒）→ 与 body 背景像素级对齐；圆角由 border-radius
-      // + overflow 裁切 → agent 卡内立绘以圆角清晰呈现。settings 打开时让位。
-      const chatRect = centerCol?.getBoundingClientRect()
-      if (chatRect !== undefined && chatRect.width > 0 && chatRect.height > 0) {
-        this.canvasHost.style.display = 'block'
-        this.canvasHost.style.left = `${chatRect.left}px`
-        this.canvasHost.style.top = `${chatRect.top}px`
-        this.canvasHost.style.width = `${Math.ceil(chatRect.width)}px`
-        this.canvasHost.style.height = `${Math.ceil(chatRect.height)}px`
-        const bodyStyle = getComputedStyle(document.body)
-        this.canvasHost.style.setProperty('background-image', bodyStyle.backgroundImage, 'important')
-        this.canvasHost.style.setProperty('background-size', `${window.innerWidth}px ${window.innerHeight}px`, 'important')
-        this.canvasHost.style.setProperty('background-position', `${-chatRect.left}px ${-chatRect.top}px`, 'important')
-        this.canvasHost.style.setProperty('background-repeat', 'no-repeat', 'important')
-        this.canvasHost.style.setProperty('border-radius', CARD_RADIUS + 'px', 'important')
-      } else {
-        this.canvasHost.style.display = 'none'
-      }
-    }
     if (this.chatFrameHost !== null) {
       // agent 区气隙框（窗缘锚定）：盒 = [侧栏右缘, 窗右] × [卡顶-GAP, 窗底]，
       // border 带内缘精确贴合 agent 卡可见区（左/顶）、外缘直达窗缘（右/底）——
@@ -672,7 +652,7 @@ export class IdeLayoutController {
         const gapTop = CARD_GAP
         const gapRight = Math.max(CARD_GAP, Math.ceil(window.innerWidth - chatRect.right))
         const gapBottom = Math.max(CARD_GAP, Math.ceil(window.innerHeight - chatRect.bottom))
-        // 左带宽 = 实测差值：带内缘精确落在卡左缘（与绿环内缘、镜像窗对齐）。
+        // 左带宽 = 实测差值：带内缘精确落在卡左缘（与绿环内缘对齐）。
         // 旧的 +4px 重叠保险已撤：直角绿条伸进卡内会切掉卡的左右圆角弧一小
         // 条，且它防的「侧栏装饰框未知偏移」场景现在由卡四周的 box-shadow
         // 绿环兜底（缝多宽带就多宽，覆盖性不受损）。
@@ -794,15 +774,14 @@ export class IdeLayoutController {
     this.listOriginalHeight = ''
     this.listOriginalMaxHeight = ''
     this.chatHandle?.remove()
-    this.canvasHost?.remove()
-    this.canvasHost = null
     this.chatFrameHost?.remove()
     this.chatFrameHost = null
     this.sidebarFrameHost?.remove()
     this.sidebarFrameHost = null
 
     const centerCol = this.frame?.querySelector<HTMLElement>('[class*="centerCol"]') ?? null
-    // apply() 写入宿主中栏的内联样式，卸载时恢复。
+    // apply() 写入宿主中栏的内联样式，卸载时恢复（background-color 已随去膜
+    // 移除写入，但保留还原项无害且防旧版残留——插件热升级场景下旧内联仍在）。
     for (const prop of ['margin-left', 'min-width', 'width', 'height', 'margin-top', 'margin-right', 'margin-bottom', 'border-radius', 'overflow', 'clip-path', 'background-color', 'box-shadow', 'backdrop-filter']) {
       centerCol?.style.removeProperty(prop)
     }

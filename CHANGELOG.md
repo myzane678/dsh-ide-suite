@@ -4,6 +4,25 @@ dsh-ide-suite（monorepo）版本与更新记录，跟随仓库 tag（v0.1.0 起
 
 v0.x 为 `dsh-ide-layout` 单包时代历史（全历史随 subtree 合入保留）；各子包完整明细见其各自 CHANGELOG：[layout](dsh-ide-layout/CHANGELOG.md) · [question-pin](dsh-question-pin/CHANGELOG.md) · [core](dsh-lsp-core/CHANGELOG.md) · [python](dsh-lsp-python/CHANGELOG.md) · [typescript](dsh-lsp-typescript/CHANGELOG.md) · [powershell](dsh-lsp-powershell/CHANGELOG.md) · [java](dsh-lsp-java/CHANGELOG.md)。
 
+## [1.7.1] - 2026-09-06
+
+布局净化小包：移除死层立绘镜像窗 + 移除 agent 卡白纱膜 + agent 卡四角亚像素色点修复。仅 `dsh-ide-layout` 升级（1.7.0 → 1.7.1），其余七包不变。
+
+### 移除
+
+- **立绘镜像窗（canvasHost）**（dsh-ide-layout）：z:-1 死层（宿主层序下从不显示、无害挂着），字段声明 / 创建 / apply 几何同步 / dispose 四处全删——立绘呈现由 body 背景与 character-stage 动态 clip-path 独立承担。
+- **agent 卡白纱膜（background-color）**（dsh-ide-layout）：卡面 18% 白色平涂膜经试调 0.18 → 0.10 → 0.06 后整段移除——低 alpha 下膜只余雾感（文字垫底已由头部独立染深承担、圆角轮廓已由绿环/气隙系统承担），回归皮肤「中栏强制透明」设计态，立绘 100% 原色透出；dispose 还原项保留防旧版内联残留。
+
+### 修复
+
+- **agent 卡四角亚像素色点**（dsh-ide-layout）：卡面弧（R=16）、绿环外弧（=clip 弧 R+GAP=22）、方角 border 带三层在角部的覆盖都到不了「卡矩形角点 ↔ 绿环外弧」之间（绿环外弧距角点 16√2−22≈0.6px），缝露 body 底色成角部色点。修复：chatFrame content 区四角铺 radial-gradient 补块（tile 24px 贴 padding-box 角 = 卡矩形角、圆心 = 角内 16px 卡面弧心、弧内透明 / 弧外填绿），与 sidebarFrame 补块同构。
+
+### 版本
+
+dsh-ide-layout 1.7.0 → 1.7.1；dsh-question-pin / dsh-lsp-core / python / typescript / powershell / java / rust 不变。
+
+> dsh-lsp-powershell 的 vendor tgz 资产无变化，仍使用 v1.0.0 提供的 dsh-lsp-powershell-1.0.0.tgz。
+
 ## [1.7.0] - 2026-09-06
 
 edit/write 工具行 diff 增强（行级 LCS 对齐视图）+ agent 写盘后编辑器实时刷新 + 设置面板让位塌陷修复。仅 `dsh-ide-layout` 升级（1.6.0 → 1.7.0），其余七包不变。
