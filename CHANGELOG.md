@@ -4,6 +4,25 @@ dsh-ide-suite（monorepo）版本与更新记录，跟随仓库 tag（v0.1.0 起
 
 v0.x 为 `dsh-ide-layout` 单包时代历史（全历史随 subtree 合入保留）；各子包完整明细见其各自 CHANGELOG：[layout](dsh-ide-layout/CHANGELOG.md) · [question-pin](dsh-question-pin/CHANGELOG.md) · [core](dsh-lsp-core/CHANGELOG.md) · [python](dsh-lsp-python/CHANGELOG.md) · [typescript](dsh-lsp-typescript/CHANGELOG.md) · [powershell](dsh-lsp-powershell/CHANGELOG.md) · [java](dsh-lsp-java/CHANGELOG.md)。
 
+## [1.7.0] - 2026-09-06
+
+edit/write 工具行 diff 增强（行级 LCS 对齐视图）+ agent 写盘后编辑器实时刷新 + 设置面板让位塌陷修复。仅 `dsh-ide-layout` 升级（1.6.0 → 1.7.0），其余七包不变。
+
+### 新增
+
+- **工具行 diff 增强**（dsh-ide-layout）：edit / write / str_replace_editor 工具行经宿主 keyed 插槽 `tool.call.toolview` shadow 注册 DiffStatRow（三把 wire 工具名 key 全注册 + cordis inject 登记 slots + 指数退避重试 + `<html data-ide-diffstat>` 注册结果自证）。收起行 = 中文三态标题（正在编辑/正在写入/读取 → 编辑/写入/读取）+ 按扩展名文件图标 + 目录段容器查询响应式（≤420px 隐藏）+ 绿红滚动数字徽章 +N/−N（0 值方向不显示）；展开 = 行级 LCS 对齐 diff（上下文行保留、红绿只标真实变化行、统一行号列、行内 word 高亮、超 1500 行退化整块、头 8+尾 8 折叠、复制按钮、footer `└ +N -M · K file`），统计口径 = 对齐后真实变化行数；文本 `pre-wrap + overflow-wrap: anywhere` 折行、底色铺满整行随 agent 区宽度变化。
+- **编辑器实时刷新**（dsh-ide-layout）：agent 写盘后（fs 事件防抖）自动重读打开的未 dirty 文本 tab，内容变化才经 `contentRevision` 计数 + CodeMirror `Transaction.remote` 全量注入——不误置 dirty、照发 LSP didChange 防幽灵诊断；dirty tab 绝不覆盖（写回时二次校验）。
+
+### 修复
+
+- **设置塌陷**（dsh-ide-layout）：设置面板让位只藏编辑器（workbench display:none）未同步撤 centerCol `margin-left` → 中间 642px 空洞露窗口底色。修复：`settingsOpen()` 提前到 apply 上部计算，中栏 margin/minWidth 与编辑器显隐同源联动（设置开 → margin 归 CARD_GAP 回两栏位；关 → 恢复挤压）——让位与挤压永远同源。
+
+### 版本
+
+dsh-ide-layout 1.6.0 → 1.7.0；dsh-question-pin / dsh-lsp-core / python / typescript / powershell / java / rust 不变。
+
+> dsh-lsp-powershell 的 vendor tgz 资产无变化，仍使用 v1.0.0 提供的 dsh-lsp-powershell-1.0.0.tgz。
+
 ## [1.6.1] - 2026-09-06
 
 修复 dsh-question-pin 置顶条压住宿主设置面板的问题。仅 `dsh-question-pin` 升级（0.1.0 → 0.1.1），其余七包不变。

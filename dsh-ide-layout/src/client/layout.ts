@@ -538,6 +538,10 @@ export class IdeLayoutController {
     const maxChat = Math.max(MIN_CHAT_PX, total - EDITOR_MIN)
     const chat = Math.min(Math.max(MIN_CHAT_PX, state.chatWidth), maxChat)
     const work = panelVisible ? Math.max(EDITOR_MIN, total - chat) : 0
+    const settings = settingsOpen()
+    // 设置面板开着 → 编辑器外壳整体让位（下方 shown 判定）。中栏 margin 必须
+    // 同步归零：面板困在侧栏受限层叠上下文里，编辑器 display:none 后挤压还在
+    // 就会露出一条无人填充的窗口底色空洞（本场踩过：设置一开中间一大块绿）。
 
     const centerCol = this.frame?.querySelector<HTMLElement>('[class*="centerCol"]') ?? null
     if (centerCol !== null) {
@@ -548,8 +552,8 @@ export class IdeLayoutController {
       // 均已根治；皮肤运行时只测量**侧栏**顶边，不读 agent 区，margin 安全）。
       // 右/下 4px = agent 卡与窗口边缘的气隙；上气隙（依赖 nativeInset）在
       // 下方统一设置。
-      centerCol.style.marginLeft = panelVisible ? `${work}px` : `${CARD_GAP}px`
-      centerCol.style.minWidth = panelVisible ? '0' : ''
+      centerCol.style.marginLeft = panelVisible && !settings ? `${work}px` : `${CARD_GAP}px`
+      centerCol.style.minWidth = panelVisible && !settings ? '0' : ''
       centerCol.style.marginRight = `${CARD_GAP}px`
       centerCol.style.marginBottom = `${CARD_GAP}px`
       centerCol.style.borderRadius = CARD_RADIUS + 'px'
@@ -607,7 +611,7 @@ export class IdeLayoutController {
     const topInset = Math.max(nativeInset, skinTopTrimInset())
     // 设置面板打开期间整个编辑器外壳让位（display:none，DOM/状态保留，关面板
     // 后恢复）——设置模态困在侧边栏的受限层叠上下文里，z-index 无解，唯有不渲染。
-    const settings = settingsOpen()
+    // settings 已在上方中栏 margin 处计算（两处必须同源联动）。
     const shown = panelVisible && !settings
     if (workbenchHost !== null) {
       // 卡片不贴邻区：左右（文件树/侧栏 ↔ 编辑区 ↔ agent 区）、上下（标题栏/

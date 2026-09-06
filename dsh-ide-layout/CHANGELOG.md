@@ -2,6 +2,20 @@
 
 本项目版本与更新记录。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [1.7.0] - 2026-09-06
+
+edit/write 工具行 diff 增强（行级 LCS 对齐视图）+ agent 写盘后编辑器实时刷新 + 设置面板让位塌陷修复。
+
+### 新增
+
+- **工具行 diff 增强**：edit / write / str_replace_editor 工具行经宿主 keyed 插槽 `tool.call.toolview` shadow 注册 DiffStatRow（新增 `src/client/tool-diff-row.tsx` + 纯函数模型 `tool-diff-model.ts` 可单测；三把 wire 工具名 key 全注册 + `export const inject` 登记 `slots` + 12 次指数退避重试 + `<html data-ide-diffstat="key=状态">` 注册结果自证）。收起行 = 中文三态标题（正在编辑/正在写入/读取 → 编辑/写入/读取）+ 按扩展名文件图标（json→{}、md→⇅、README→ⓘ）+ 目录段容器查询响应式（≤420px 隐藏，选择器 `div[data-ide-diffstat]`）+ 绿红滚动数字徽章 +N/−N（0 值方向不显示，逐字符竖轮 transition，prefers-reduced-motion 关闭）；展开 = 行级 LCS 对齐 diff（上下文行保留、红绿只标真实变化行、统一行号列、行内 word 高亮、超 1500 行退化整块、头 8+尾 8 折叠、复制按钮、footer `└ +N -M · K file`），统计口径 = 对齐后真实变化行数（10 行换 1 行显示 +1 −1）；文本 `pre-wrap + overflow-wrap: anywhere` 折行、底色铺满整行随 agent 区宽度变化（行号只标逻辑行首行）。
+- **编辑器实时刷新**：index.ts `syncOpenTabs`——agent 写盘后（fs 事件防抖）自动重读打开的未 dirty 文本 tab，内容变化才写 store（`contentRevision` 计数）→ CodeMirrorPane effect 以 `Transaction.remote` 全量注入：不误置 dirty、照发 LSP didChange 防幽灵诊断；dirty tab 绝不覆盖（写回时二次校验）。
+
+### 修复
+
+- **设置塌陷**：设置面板让位只藏编辑器（workbench display:none）未同步撤 centerCol `margin-left` → 中间 642px 空洞露窗口底色。修复：`settingsOpen()` 提前到 apply 上部计算，中栏 margin/minWidth 与编辑器显隐同源联动（设置开 → margin 归 CARD_GAP 回两栏位；关 → 恢复挤压）——让位与挤压永远同源。
+- **abdicate 防御**：edit 工具 settled block 的 `resultView` 是显式 `null`（wire 序列化），`view !== undefined` 判空漏 null → 渲染崩 → SlotErrorBoundary abdicate 退休回落内置（Edit 行永远旧形态）。修复：truthy 判空（`view != null`）+ 类型 `| null`。
+
 ## [1.6.0] - 2026-09-05
 
 浮岛卡片化布局（三分区圆角卡 + 绿色气隙 + 立绘镜像窗）+ VS Code 式预览模式 + 终端独立面板 + 十项视觉修复。同仓库新包 `dsh-question-pin`（0.1.0）承接原「这条回答对应哪条提问」置顶条（见「移除」）。

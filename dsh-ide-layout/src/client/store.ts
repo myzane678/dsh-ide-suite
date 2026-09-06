@@ -41,6 +41,9 @@ export interface EditorTab {
   /** 预览 tab（VS Code 式）：以「预览方式」打开的临时 tab，标题斜体。
    *  点击该 tab / 文件树再点该文件 / 开始编辑 → 固定为正式打开（字段清除）。 */
   preview?: boolean
+  /** 外部内容同步计数：agent 写盘后重读命中时 +1，CodeMirrorPane 据此把
+   *  新内容 dispatch 进编辑器（Transaction.remote，不置 dirty）。 */
+  contentRevision?: number
 }
 
 export interface IdeState {

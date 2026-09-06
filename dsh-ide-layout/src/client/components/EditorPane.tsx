@@ -7,7 +7,7 @@ import { createPortal } from 'react-dom'
 import MarkdownIt from 'markdown-it'
 import { basicSetup } from 'codemirror'
 import { EditorView, GutterMarker, gutter, hoverTooltip, keymap, showTooltip, tooltips, type Tooltip } from '@codemirror/view'
-import { Compartment, Prec, EditorState, StateEffect, StateField, type Extension, type Text } from '@codemirror/state'
+import { Compartment, Prec, EditorState, StateEffect, StateField, Transaction, type Extension, type Text } from '@codemirror/state'
 import { HighlightStyle, indentUnit, syntaxHighlighting } from '@codemirror/language'
 import { tags as t } from '@lezer/highlight'
 import { autocompletion, acceptCompletion, completionStatus, hasNextSnippetField, hasPrevSnippetField, nextSnippetField, prevSnippetField, snippet, startCompletion, type CompletionContext, type CompletionResult } from '@codemirror/autocomplete'
@@ -1338,7 +1338,10 @@ function CodeMirrorPane({ tab, onContentChange, onSave, onContextAction, onResta
           }
           if (update.docChanged) {
             const content = update.state.doc.toString()
-            propsRef.current.onContentChange(propsRef.current.tab.id, content)
+            // Transaction.remote = 外部内容同步（agent 写盘 → index.ts 重读注入）：
+            // 不置 dirty（绝不误标成用户编辑），但照常同步 LSP（否则诊断基于旧文本）。
+            const remote = update.transactions.some((tr) => tr.annotation(Transaction.remote) !== undefined)
+            if (!remote) propsRef.current.onContentChange(propsRef.current.tab.id, content)
             // 同步全量文本给 LSP（didChange，版本号内部递增）。
             propsRef.current.lsp?.updateDocument(propsRef.current.tab.path, content)
              // import/from import 后的空前缀需要主动唤起补全；CodeMirror 默认只在
@@ -1374,6 +1377,23 @@ function CodeMirrorPane({ tab, onContentChange, onSave, onContextAction, onResta
     // 组件以 key=tab.id 重建，effect 仅在挂载时执行一次
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // 外部内容同步（agent 写盘）：store 的 contentRevision 被重读逻辑 bump 时，
+  // 把新内容以 Transaction.remote 全量注入（updateListener 据此不置 dirty、
+  // 照常同步 LSP）。syncedRevisionRef 记录已注入版本：组件以 key=tab.id 重建
+  // 时 mount doc 已是最新内容，初值对齐避免重复注入。
+  const syncedRevisionRef = useRef(tab.contentRevision ?? 0)
+  useEffect(() => {
+    const revision = tab.contentRevision ?? 0
+    if (revision === syncedRevisionRef.current) return
+    syncedRevisionRef.current = revision
+    const view = viewRef.current
+    if (view === null) return
+    view.dispatch({
+      changes: { from: 0, to: view.state.doc.length, insert: tab.content },
+      annotations: Transaction.remote.of(true),
+    })
+  }, [tab.contentRevision, tab.content])
 
   // LSP 会话在 EditorPane 渲染后才建立（root effect），挂载时 lsp 可能还是
   // null；这里单独监听：lsp 就绪（或 root 变化重建）时把当前文档登记给服务器。

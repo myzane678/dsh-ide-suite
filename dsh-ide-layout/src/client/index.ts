@@ -15,12 +15,15 @@ import type { LspCapabilitiesAccessor } from 'dsh-lsp-core/client'
 import { IdeLayoutController } from './layout.ts'
 import { createStore, IDE_DEFAULT, LAYOUT_DEFAULT, type EditorTab, type IdeState } from './store.ts'
 import { mountPanels, type IdeMountApi } from './mount.tsx'
-import { subscribeChanges } from './api.ts'
+import { apiRead, subscribeChanges } from './api.ts'
 import { openFileInTabs } from './components/EditorPane.tsx'
 import { mountMessageNav } from './components/MessageNav.tsx'
+import { registerToolDiffRow } from './tool-diff-row.tsx'
 
-/** Required services: sessions + workspaces for the project root. */
-export const inject = ['sessions', 'workspaces', 'lspCapabilities']
+/** Required services: sessions + workspaces for the project root; slots 用于
+ *  edit/write 工具行 shadow 注册（cordis 规矩：ctx 上访问未 inject 声明的服务
+ *  会 throw「cannot get property ... without inject」）。 */
+export const inject = ['sessions', 'workspaces', 'lspCapabilities', 'slots']
 
 /** Apply the browser half. */
 export function apply(ctx: ClientContext): void {
@@ -34,6 +37,8 @@ export function apply(ctx: ClientContext): void {
     let currentRoot = ''
     /** fs 变更事件防抖：合并高频事件（如 agent 写会话文件），避免连续刷新。 */
     let treeRefreshTimer: ReturnType<typeof setTimeout> | undefined
+    /** 打开 tab 的重读代际：丢弃迟到的旧响应，防旧内容覆盖新内容。 */
+    let tabSyncGen = 0
     /** Force the FileTree to re-list (fs changed on disk).
      *  轻量方案：bump treeTick → FileTree 保留展开状态重载数据；
      *  不重挂载 panels（旧方案每次 fs 变更都重建文件树/编辑器/终端 → 闪烁）。
@@ -43,7 +48,46 @@ export function apply(ctx: ClientContext): void {
       treeRefreshTimer = setTimeout(() => {
         treeRefreshTimer = undefined
         ide.update((prev) => ({ ...prev, treeTick: prev.treeTick + 1, gitTick: prev.gitTick + 1 }))
+        syncOpenTabs()
       }, 400)
+    }
+    /**
+     * 打开 tab 的磁盘同步（agent 写盘后编辑器实时更新）：
+     * 对打开着的、未 dirty 的文本 tab 并行重读盘，内容有变化才写回 store
+     * （contentRevision +1 → CodeMirrorPane 以 Transaction.remote 注入新 doc，
+     * 不置 dirty）。dirty tab 不动（绝不覆盖用户编辑中的内容）；文件被删等
+     * 读取失败 → 跳过该 tab。generation token 防旧响应乱序覆盖。
+     */
+    const syncOpenTabs = (): void => {
+      const gen = ++tabSyncGen
+      const snapshot = ide.getSnapshot()
+      const targets = snapshot.tabs.filter((tab) => !tab.dirty && tab.kind !== 'image' && tab.truncated !== true)
+      if (targets.length === 0) return
+      void Promise.all(
+        targets.map(async (tab) => {
+          const result = await apiRead(snapshot.root, tab.path, tab.encoding)
+          // 内容与打开时一致 → 无需注入（保住光标与撤销栈）。
+          if (!result.ok || gen !== tabSyncGen || result.value.content === tab.content) return null
+          return { id: tab.id, content: result.value.content, mtime: result.value.mtime }
+        }),
+      ).then((updates) => {
+        const hits = updates.filter((u) => u !== null)
+        if (gen !== tabSyncGen || hits.length === 0) return
+        ide.update((prev) => ({
+          ...prev,
+          tabs: prev.tabs.map((tab) => {
+            const hit = hits.find((u) => u !== null && u.id === tab.id)
+            // 写回时刻再校验 dirty：过滤后用户才开始编辑的场景不覆盖。
+            if (hit === null || hit === undefined || tab.dirty) return tab
+            return {
+              ...tab,
+              content: hit.content,
+              savedMtime: hit.mtime,
+              contentRevision: (tab.contentRevision ?? 0) + 1,
+            }
+          }),
+        }))
+      })
     }
 
     // dsh-lsp-core 服务（阶段 1：Python 走新链路；ts/ps/java 暂走旧 LspClient 双轨）。
@@ -161,6 +205,14 @@ export function apply(ctx: ClientContext): void {
       disposeMessageNav = mountMessageNav(ctx)
     } catch (error) {
       console.error('[dsh-ide-layout] message-nav mount failed:', error)
+    }
+
+    // edit/write 工具行增强（+N/-N 统计 + diff 默认直接展开）：shadow 注册到
+    // 宿主 keyed 插槽，注册失败只降级回内置行，不影响 IDE 主布局。
+    try {
+      disposers.push(...registerToolDiffRow(ctx))
+    } catch (error) {
+      console.error('[dsh-ide-layout] tool-diff-row register failed:', error)
     }
 
     return () => {
