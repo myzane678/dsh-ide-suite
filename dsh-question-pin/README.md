@@ -12,6 +12,7 @@ DSH web GUI 的 agent 区置顶条插件：「这条回答对应哪条提问」�
 
 - 纯浏览器端外挂：portal 到 body、被动监听（scroll 捕获 + rAF 节流 + 消息流式更新的 MutationObserver），零宿主 DOM 改动，卸载全清理。
 - 依赖 dsh-client-ui-conversation 的锚点体系（版本依赖点）：行容器 `[data-chat-anchor-key]`、行类型 `data-chat-flow-kind="user"`、滚动容器 `[data-conversation-scroll]`。
+- 可选增强：监听 dsh-ide-layout 的 `dsh-ide-layout-applied` 布局完成事件——侧栏/编辑区/聊天区拖动与开合时逐帧同帧跟随（拖拽帧轻量直写几何，React state 提交晚一帧的拖尾消除）；未安装 dsh-ide-layout 时该信号不存在，行为退回纯滚动/resize/DOM 观察路径。
 - host 侧为空实现（浏览器-only 插件）。
 
 ## 安装（desktop profile）
@@ -34,6 +35,10 @@ pnpm --filter dsh-question-pin watch    # 增量
 
 纯 client 改动，`lib/client.js` 重新构建后刷新页面即生效。
 
+## 更新日志
+
+见 [CHANGELOG.md](CHANGELOG.md)。
+
 ## License
 
-MIT
+[MIT](LICENSE)

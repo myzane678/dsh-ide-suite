@@ -4,6 +4,26 @@ dsh-ide-suite（monorepo）版本与更新记录，跟随仓库 tag（v0.1.0 起
 
 v0.x 为 `dsh-ide-layout` 单包时代历史（全历史随 subtree 合入保留）；各子包完整明细见其各自 CHANGELOG：[layout](dsh-ide-layout/CHANGELOG.md) · [question-pin](dsh-question-pin/CHANGELOG.md) · [core](dsh-lsp-core/CHANGELOG.md) · [python](dsh-lsp-python/CHANGELOG.md) · [typescript](dsh-lsp-typescript/CHANGELOG.md) · [powershell](dsh-lsp-powershell/CHANGELOG.md) · [java](dsh-lsp-java/CHANGELOG.md)。
 
+## [1.8.0] - 2026-09-12
+
+DSH Desktop 2.0.9 适配 + 实时性专项：固定浮层同帧跟随、侧栏拖拽帧接管、长列表逐帧重排治理、事件链去轮询。`dsh-ide-layout` 升级（1.7.2 → 1.8.0），`dsh-question-pin` 升级（0.1.1 → 0.2.0），其余七包不变。
+
+### 变更
+
+- **原生侧栏拖拽帧接管**（layout）：拖拽期间插件按指针位移纯算术直写分栏网格（弹性中列）、手柄与侧栏内容列宽度，宿主逐帧 `onDrag → setSidebar → 全树重渲染`（实测单帧 ~85ms、整窗 ~12fps 的抖动源）被 capture 阶段拦截；松手终值合成事件一次性交还，宽度持久化无缝。宽度钳制与 DSH 原生一致（264–420px），结构定位不依赖运行时哈希类名。
+- **固定浮层同帧跟随**（layout + question-pin）：布局完成事件每帧派发并带 `detail.dragging`；问答置顶条 / MessageNav / TermFab 事件驱动接入，拖拽帧几何同帧直写（React 提交晚一帧的可见拖尾消除）。
+- **长列表逐帧重排治理**（layout）：消息行 `content-visibility: auto`，分栏拖动单帧排版 ~85ms → ~3ms，长会话滚动同步受益。
+- **事件链去轮询**（layout）：MessageNav 移除 2 秒轮询；文件监听降级 3 秒轮询改目录 watcher 集合（深层变更无 3 秒延迟、无漏报）；Git 冷却期事件记账补刷（保留 1s 防抖）。
+- **文件树卡片对称**（layout）：树滚动条隐藏（VS Code 同款）+ 右边距/右内边距平衡。
+- **文件树高度自适应**（layout）：`fitTreeHeight()` 实测收敛，工作区/会话列表保底 360px（治「显示不全、时好时坏」）。
+- **官方对话宽度手柄隐藏**（layout）：原生 sidebar 手柄保留。
+
+### 版本
+
+dsh-ide-layout 1.7.2 → 1.8.0；dsh-question-pin 0.1.1 → 0.2.0；dsh-lsp-core / python / typescript / powershell / java / rust 不变。
+
+> dsh-lsp-powershell 的 vendor tgz 资产无变化，仍使用 v1.0.0 提供的 dsh-lsp-powershell-1.0.0.tgz。
+
 ## [1.7.2] - 2026-09-06
 
 悬浮终端钮会话页显隐：欢迎页（还没发生会话）右上角不再出现悬浮终端钮。仅 `dsh-ide-layout` 升级（1.7.1 → 1.7.2），其余七包不变。

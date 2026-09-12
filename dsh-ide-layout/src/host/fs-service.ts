@@ -9,7 +9,7 @@
 
 import { mkdir, readdir, readFile, realpath, rename as renameFs, rm, stat, writeFile } from 'node:fs/promises'
 import { watch as watchPath, type Dirent, type FSWatcher } from 'node:fs'
-import { join, dirname } from 'node:path'
+import { join, dirname, relative } from 'node:path'
 import type { DirListing, FileRead, FileReadBinary, FsEntry, PanelError } from '../core/types.ts'
 import { isTextEncodingId, type TextEncodingId } from '../core/encoding.ts'
 import { imageMimeForPath, IMAGE_CAP_BYTES } from '../core/media.ts'
@@ -25,8 +25,6 @@ export const SEARCH_SKIP_DIRS = new Set(['.git', 'node_modules'])
 export const SEARCH_MAX_RESULTS = 500
 /** 搜索访问目录数上限（防超大仓库/深层嵌套把请求拖死）。 */
 export const SEARCH_MAX_DIRS = 20_000
-/** Polling fallback interval when recursive watch is unavailable. */
-const POLL_FALLBACK_MS = 3_000
 
 /** True when the relative path is, or passes through, a .git component. */
 function isGitPath(rel: string): boolean {
@@ -413,15 +411,16 @@ export class FsService {
 
   /**
    * Watch a root recursively and emit change events (debounced + batched).
-   * @param root - project root to watch (gated on connect).
-   * @param onChange - fired (debounced) when anything under root changed.
-   * @returns disposer.
+   * Native recursive watching is preferred; platforms without it receive one watcher per
+   * relevant directory instead of a periodic signature scan, so deep changes stay real-time.
    */
   watch(root: string, onChange: () => void): () => void {
     let disposed = false
     let timer: NodeJS.Timeout | undefined
-    let pollTimer: NodeJS.Timeout | undefined
     let watcher: FSWatcher | undefined
+    let refreshingFallback = false
+    let fallbackRefreshQueued = false
+    const directoryWatchers = new Map<string, FSWatcher>()
     const fire = (): void => {
       if (timer !== undefined) return
       timer = setTimeout(() => {
@@ -429,18 +428,77 @@ export class FsService {
         if (!disposed) onChange()
       }, 150)
     }
-    let lastSignature = ''
-    const poll = (): void => {
-      void this.signature(root).then((signature) => {
-        if (signature === null || signature === lastSignature) return
-        lastSignature = signature
-        fire()
-      })
+    const closeFallbackWatchers = (): void => {
+      for (const directoryWatcher of directoryWatchers.values()) directoryWatcher.close()
+      directoryWatchers.clear()
     }
-    const startPolling = (): void => {
-      if (pollTimer !== undefined) return
-      poll()
-      pollTimer = setInterval(poll, POLL_FALLBACK_MS)
+    const startDirectoryWatchers = async (canonical: string): Promise<void> => {
+      if (disposed) return
+      if (refreshingFallback) {
+        fallbackRefreshQueued = true
+        return
+      }
+      refreshingFallback = true
+      try {
+        const directories = new Set<string>()
+        const queue = [canonical]
+        while (queue.length > 0 && !disposed) {
+          const directory = queue.shift()!
+          const rel = relative(canonical, directory)
+          if (rel !== '' && isIgnoredWatchPath(rel)) continue
+          directories.add(directory)
+          let entries: Dirent[]
+          try {
+            entries = await readdir(directory, { withFileTypes: true })
+          } catch {
+            continue
+          }
+          for (const entry of entries) {
+            if (!entry.isDirectory()) continue
+            const childRel = rel === '' ? entry.name : join(rel, entry.name)
+            if (!isIgnoredWatchPath(childRel)) queue.push(join(directory, entry.name))
+          }
+        }
+        for (const [directory, directoryWatcher] of directoryWatchers) {
+          if (directories.has(directory)) continue
+          directoryWatcher.close()
+          directoryWatchers.delete(directory)
+        }
+        for (const directory of directories) {
+          if (directoryWatchers.has(directory)) continue
+          try {
+            const directoryWatcher = this.spawnWatcher(directory, { recursive: false }, (_event, filename) => {
+              const name = filename === null
+                ? null
+                : Buffer.isBuffer(filename) ? filename.toString('utf8') : filename
+              const rel = name === null ? relative(canonical, directory) : relative(canonical, join(directory, name))
+              if (rel !== '' && isIgnoredWatchPath(rel)) return
+              fire()
+              void startDirectoryWatchers(canonical)
+            })
+            directoryWatcher.on('error', () => {
+              directoryWatcher.close()
+              directoryWatchers.delete(directory)
+              if (!disposed) void startDirectoryWatchers(canonical)
+            })
+            directoryWatchers.set(directory, directoryWatcher)
+          } catch {
+            // A directory can disappear between readdir and watch; the parent watcher
+            // will notify the next topology refresh without falling back to polling.
+          }
+        }
+      } finally {
+        refreshingFallback = false
+        if (fallbackRefreshQueued && !disposed) {
+          fallbackRefreshQueued = false
+          void startDirectoryWatchers(canonical)
+        }
+      }
+    }
+    const useDirectoryWatchers = (canonical: string): void => {
+      watcher?.close()
+      watcher = undefined
+      void startDirectoryWatchers(canonical)
     }
     void this.gate(root).then((gated) => {
       if (!gated.ok || disposed || gated.canonical === undefined) return
@@ -453,46 +511,17 @@ export class FsService {
           fire()
         })
         watcher.on('error', () => {
-          if (disposed) return
-          watcher?.close()
-          watcher = undefined
-          startPolling()
+          if (!disposed) useDirectoryWatchers(gated.canonical!)
         })
       } catch {
-        watcher = undefined
-        startPolling()
+        useDirectoryWatchers(gated.canonical)
       }
     })
     return () => {
       disposed = true
       if (timer !== undefined) clearTimeout(timer)
-      if (pollTimer !== undefined) clearInterval(pollTimer)
       watcher?.close()
-    }
-  }
-
-  /** Cheap root signature: entries of the root with sizes/mtimes (poll fallback). */
-  private async signature(root: string): Promise<string | null> {
-    const gated = await this.gate(root)
-    if (!gated.ok || gated.canonical === undefined) return null
-    try {
-      const entries: Dirent[] = await readdir(gated.canonical, { withFileTypes: true })
-      const parts: string[] = []
-      for (const entry of entries.slice(0, 200)) {
-        let extra = ''
-        if (!entry.isDirectory()) {
-          try {
-            const info = await stat(join(gated.canonical, entry.name))
-            extra = `${info.size}:${Math.round(info.mtimeMs / 1000)}`
-          } catch {
-            extra = 'gone'
-          }
-        }
-        parts.push(`${entry.name}${entry.isDirectory() ? '/' : ''}${extra}`)
-      }
-      return parts.join('|')
-    } catch {
-      return null
+      closeFallbackWatchers()
     }
   }
 }

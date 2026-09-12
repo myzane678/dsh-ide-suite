@@ -582,7 +582,7 @@ export function FileTree({ root, treeTick = 0, onOpenFile, onOpenFilePreview, on
           )}
         </div>
       )}
-      <div style={{ flex: 1, overflow: 'auto', padding: '4px 0' }}>
+      <div style={{ flex: 1, overflow: 'auto', padding: '4px 10px 4px 0' }}>
         {root === '' ? (
           <div style={{ padding: 12, color: '#9ca3af', fontSize: 13 }}>请先打开一个工作区会话</div>
         ) : searchState !== null ? (

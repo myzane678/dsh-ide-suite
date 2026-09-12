@@ -19,6 +19,15 @@
  */
 
 import type { IdeState, LayoutState, ListenerStore } from './store.ts'
+import {
+  canFinishDrag,
+  canStartDrag,
+  chatWidthFromDrag,
+  clampChatWidth,
+  EDITOR_MIN_PX,
+  type DragMode,
+  shouldSyncSidebarImmediately,
+} from './chat-resize.ts'
 
 /** The editor portal host (mount.tsx renders the EditorPane into it). */
 let workbenchHost: HTMLDivElement | null = null
@@ -142,8 +151,6 @@ function nativeTopInset(probeX: number): number {
   return inset
 }
 
-const MIN_CHAT_PX = 440
-const EDITOR_MIN = 300
 /** 分区卡片之间的缝隙（px）：VS Code 式——文件树/编辑区/agent 区互不贴死，
  *  中间留小缝透出底色，配合圆角+描边做卡片分隔感。 */
 const CARD_GAP = 6
@@ -154,6 +161,22 @@ const CARD_RADIUS = 16
  *  亮度居中、色相与周围的深蓝/白/浅米全部拉开，对比度一眼可辨。
  *  换主题色改这一处。 */
 const WORKBENCH_CANVAS_COLOR = '#2e9e5b'
+
+/** DSH 桌面壳的侧栏宽度钳制（app.asar 2.0.9：setSidebar = clamp(w, 264, 420)）。 */
+const DSH_SIDEBAR_MIN_PX = 264
+const DSH_SIDEBAR_MAX_PX = 420
+
+/** 文件树默认高度比例（原 clamp(200px, 46vh, 720px) 的中间项）。 */
+const TREE_DEFAULT_RATIO = 0.46
+/** 文件树高度下限（px），与拖拽手柄下限一致。 */
+const TREE_MIN_PX = 120
+/** 文件树高度上限比例，与拖拽手柄上限一致。 */
+const TREE_MAX_RATIO = 0.85
+/** 工作区/会话列表区要保留的最小高度（px）。侧栏是 flex column，列表区（flex:1）
+ *  会被固定高度的文件树挤压——文件树再高也必须给列表留出这段空间，否则会话/
+ *  工作区会「显示不全、过一会又好了」（46vh 随窗口尺寸浮动，列表可视区忽大忽
+ *  小；窗口变矮时列表只剩一两行）。 */
+const MIN_LIST_PX = 360
 
 /** The layout controller: embed tree, place workbench, squeeze chat. */
 export class IdeLayoutController {
@@ -166,6 +189,11 @@ export class IdeLayoutController {
   private sidebarFrameHost: HTMLDivElement | null = null
 
   private sidebarObserver: ResizeObserver | null = null
+  private sidebarObserved: HTMLElement | null = null
+  private sidebarHandleObserved: HTMLElement | null = null
+  private sidebarHandleAbort: AbortController | null = null
+  private sidebarDragAbort: AbortController | null = null
+  private sidebarDragPointerId: number | null = null
   private frameObserver: ResizeObserver | null = null
   private detailsObserver: ResizeObserver | null = null
   private footObserver: ResizeObserver | null = null
@@ -181,11 +209,197 @@ export class IdeLayoutController {
   private frameWidth = 0
   private detailsWidth = 0
   private disposers: Array<() => void> = []
+  /** apply() 的 rAF 合并句柄：一帧内多次请求只跑一次，且排在布局阶段之后。 */
+  private applyFrame: number | null = null
+  /** apply() 正在执行（防止执行期间的 DOM 变动再次调度，形成自激循环）。 */
+  private applying = false
+  /** 当前拖拽源：拖拽帧直达几何，observer 不再额外排完整布局。 */
+  private dragMode: DragMode = 'none'
 
   constructor(
     private readonly layout: ListenerStore<LayoutState>,
     private readonly ide: ListenerStore<IdeState>,
   ) {}
+
+  /**
+   * 调度一次 apply()：同一帧内的多次请求合并为一次，并放到下一帧布局前执行。
+   *
+   * 为什么必须合并：apply() 会写入大量内联样式，而宿主 DOM 变动（会话滚动时
+   * 消息节点的挂载/卸载、拖拽时布局自身的变化）会经 MutationObserver 再次
+   * 触发 apply——直接同步调用会形成「变动 → apply → 样式写入 → 变动」的高频
+   * 循环，每帧多次强制重排，表现为拖拽卡顿与滚动卡顿/闪屏。
+   */
+  private scheduleApply(): void {
+    if (this.dragMode !== 'none' || this.applying || this.applyFrame !== null) return
+    this.applyFrame = requestAnimationFrame(() => {
+      this.applyFrame = null
+      this.apply()
+    })
+  }
+
+  /** 侧栏、详情栏扣除后的 editor + agent 可用宽度。 */
+  private availableWidth(): number {
+    const frameW = this.frameWidth > 0 ? this.frameWidth : window.innerWidth
+    return Math.max(0, frameW - this.sidebarWidth - this.detailsWidth)
+  }
+
+  private currentSidebar(): HTMLElement | null {
+    return this.frame !== null ? findSidebarIn(this.frame) : findSidebar()
+  }
+
+  private readSidebarRight(sidebar: HTMLElement): number | null {
+    const right = sidebar.getBoundingClientRect().right
+    return Number.isFinite(right) && right > 0 ? right : null
+  }
+
+  private bindSidebar(sidebar: HTMLElement | null): void {
+    if (sidebar === this.sidebarObserved) {
+      if (sidebar !== null) this.bindNativeSidebarHandle(sidebar)
+      return
+    }
+    if (this.sidebarObserved !== null) this.sidebarObserver?.unobserve(this.sidebarObserved)
+    this.sidebarHandleAbort?.abort()
+    this.sidebarHandleAbort = null
+    this.sidebarDragAbort?.abort()
+    this.sidebarDragAbort = null
+    this.sidebarDragPointerId = null
+    if (this.dragMode === 'sidebar') this.dragMode = 'none'
+    this.sidebarObserved = sidebar
+    this.sidebarHandleObserved = null
+    if (sidebar === null) return
+
+    const right = this.readSidebarRight(sidebar)
+    if (right !== null) this.sidebarWidth = right
+    this.sidebarObserver?.observe(sidebar)
+    this.bindNativeSidebarHandle(sidebar)
+  }
+
+  private bindNativeSidebarHandle(sidebar: HTMLElement): void {
+    const scope = sidebar.parentElement ?? sidebar
+    const handle = sidebar.querySelector<HTMLElement>('[data-side="sidebar"]')
+      ?? scope.querySelector<HTMLElement>('[data-side="sidebar"]')
+    if (handle === this.sidebarHandleObserved) return
+
+    this.sidebarHandleAbort?.abort()
+    this.sidebarHandleObserved = handle
+    if (handle === null) return
+
+    const abort = new AbortController()
+    this.sidebarHandleAbort = abort
+    handle.addEventListener('pointerdown', (event: PointerEvent) => {
+      if (!canStartDrag(this.dragMode, event.isPrimary, event.button)) return
+      this.dragMode = 'sidebar'
+      this.sidebarDragPointerId = event.pointerId
+      if (this.applyFrame !== null) {
+        cancelAnimationFrame(this.applyFrame)
+        this.applyFrame = null
+      }
+
+      // —— 拖拽帧接管（治拖动抖动的根本手段，pin-debug-1 计时实证）——
+      // 宿主原生路径：每帧 onDrag → setSidebar → AppFrame 全树重渲染，实测单帧
+      // ~85ms（长会话大子树），整条主线程掉到 ~12fps——跟随链再快也一起抖。
+      // 接管后：拖拽帧由我们按指针位移**纯算术**直写 grid-template-columns
+      // （零 DOM 读取、零 React 状态往返，60fps）；宿主的 pointermove 在 capture
+      // 阶段拦截，React 收不到、不再逐帧重渲染。pointerdown/up/pointer capture
+      // 全部原样放行宿主：down 时它照常记 base + data-dragging（顺带关掉网格
+      // 0.3s 过渡）；up 前同步补发一个**终值合成 pointermove**（此刻 capture 仍
+      // 有效），随后放行的真实 up 触发宿主 onPointerUp 的手动冲刷——整场拖拽只
+      // 付一次 React 提交，几何无缝交还。宿主选择器/钳制解析失败时自动退回旧
+      // 的观察模式（12Hz，功能不丢）。
+      // 网格容器按**结构**找（运行时类名是 CSS Modules 哈希，不能按类名匹配）：
+      // 从手柄向上找第一个「包含侧栏元素且 display:grid」的祖先 = 分栏网格。
+      let grid: HTMLElement | null = handle.parentElement
+      while (grid !== null && (!grid.contains(sidebar) || getComputedStyle(grid).display !== 'grid')) {
+        grid = grid.parentElement
+      }
+      const frame = grid
+      // 模板取 computedStyle（已解析 px，如 "287px minmax(0px, 1fr) 420px"）。
+      const rawTemplate = frame === null ? '' : getComputedStyle(frame).gridTemplateColumns
+      const baseSidebarPx = parseFloat(rawTemplate)
+      const takeover = frame !== null && rawTemplate !== '' && Number.isFinite(baseSidebarPx)
+      const handleLeft0 = takeover ? parseFloat(handle.style.left) : Number.NaN
+      // 中列必须保持弹性（minmax(0,1fr)，与 DSH 原生模板一致）：computedStyle 会把
+      // 1fr 解析成固定 px，直接回写会把中列冻死——拖动时聊天列不跟随、轨道总和
+      // 溢出把文件树挤歪（round-10 都督实证）。只换首段，中列恢复弹性，尾段原样。
+      const templateTail = rawTemplate.trim().split(/\s+/).slice(1).join(' ')
+      const takeoverTemplate = (sidebarPx: number): string => `${sidebarPx}px minmax(0px, 1fr) ${
+        templateTail.split(/\s+/).pop() ?? '0px'
+      }`
+      // 侧栏**内容列**的宽度也是宿主 React 状态逐帧下发的（upstream slot 的
+      // width prop → 内联 width）。接管屏蔽了状态更新，内容列会冻在起始宽度
+      // （外壳变宽、会话列表/文件树卡片不动 = 都督实证的「不实时跟随/不对称」）。
+      // 拖拽帧把这些携带起始宽度的元素一并直写，松手由宿主冲刷自然接管。
+      // upstream 用**结构定位**（aside 的第一个子元素）——运行时类名是哈希，
+      // 按类名找永远是 null（round-13 实证）。
+      const asideEl = this.sidebarObserved
+      const upstream = asideEl !== null && asideEl.firstElementChild instanceof HTMLElement
+        ? (asideEl.firstElementChild as HTMLElement)
+        : null
+      const widthTargets: HTMLElement[] = []
+      if (upstream !== null && Number.isFinite(baseSidebarPx)) {
+        const startPx = `${Math.round(baseSidebarPx)}px`
+        for (const el of upstream.querySelectorAll<HTMLElement>('[style]')) {
+          if (el.style.width === startPx) widthTargets.push(el)
+        }
+      }
+      const startX = event.clientX
+      let latestX = startX
+      let takeoverFrame = 0
+      const applyTakeover = (): void => {
+        takeoverFrame = 0
+        if (frame === null) return
+        const next = Math.min(DSH_SIDEBAR_MAX_PX, Math.max(DSH_SIDEBAR_MIN_PX,
+          Math.round(baseSidebarPx + (latestX - startX))))
+        frame.style.gridTemplateColumns = takeoverTemplate(next)
+        if (Number.isFinite(handleLeft0)) handle.style.left = `${next}px`
+        for (const el of widthTargets) el.style.width = `${next}px`
+      }
+      // 注意：capture 监听里 stopPropagation 会连目标自身的 bubble 监听一起拦死
+      // （round-7 实证：分拆两个监听时侧栏完全不动）。所以追踪与阻断必须合并为
+      // **一个** capture 监听：先记坐标驱动接管，再对可信事件阻断宿主 React。
+      const onMove = (moveEvent: PointerEvent): void => {
+        if (moveEvent.pointerId !== event.pointerId) return
+        latestX = moveEvent.clientX
+        // 合成补发（isTrusted=false）必须放行——那是松手时交给宿主的终值。
+        if (takeover && moveEvent.isTrusted) moveEvent.stopPropagation()
+        if (takeover && takeoverFrame === 0) takeoverFrame = requestAnimationFrame(applyTakeover)
+      }
+      const dragAbort = new AbortController()
+      this.sidebarDragAbort?.abort()
+      this.sidebarDragAbort = dragAbort
+      handle.addEventListener('pointermove', onMove, { capture: true, signal: dragAbort.signal })
+      const finish = (endEvent: PointerEvent): void => {
+        if (!canFinishDrag(this.dragMode, this.sidebarDragPointerId, endEvent.pointerId)) return
+        if (takeover && takeoverFrame !== 0) {
+          cancelAnimationFrame(takeoverFrame)
+          takeoverFrame = 0
+        }
+        if (takeover && endEvent.type === 'pointerup') {
+          // 合成终值 move：隐式释放 capture 发生在 up 派发完成之后，此刻仍有效；
+          // 宿主 onPointerMove 记下终值，随后放行的真实 up 让它一次性冲刷。
+          handle.dispatchEvent(new PointerEvent('pointermove', {
+            bubbles: true, cancelable: true,
+            pointerId: endEvent.pointerId, pointerType: endEvent.pointerType, isPrimary: endEvent.isPrimary,
+            clientX: latestX,
+          }))
+        }
+        const current = this.currentSidebar()
+        if (current !== null) {
+          const right = this.readSidebarRight(current)
+          if (right !== null) this.sidebarWidth = right
+        }
+        // 先用最后一次真实 rect 消除最后一帧空档，再恢复正常的完整收敛。
+        this.apply(true)
+        this.dragMode = 'none'
+        this.sidebarDragPointerId = null
+        dragAbort.abort()
+        if (this.sidebarDragAbort === dragAbort) this.sidebarDragAbort = null
+        this.scheduleApply()
+      }
+      window.addEventListener('pointerup', finish, { capture: true, signal: dragAbort.signal })
+      window.addEventListener('pointercancel', finish, { capture: true, signal: dragAbort.signal })
+    }, { capture: true, signal: abort.signal })
+  }
 
   mount(): void {
     const tryAttach = (): void => {
@@ -196,31 +410,49 @@ export class IdeLayoutController {
         this.frameWidth = frame.getBoundingClientRect().width
         this.frameObserver = new ResizeObserver(() => {
           if (this.frame !== null) this.frameWidth = this.frame.getBoundingClientRect().width
-          this.apply()
+          this.scheduleApply()
         })
         this.frameObserver.observe(frame)
         this.embedWorkbench()
         this.bindDetails()
       }
+      const sidebar = this.currentSidebar()
+      this.bindSidebar(sidebar)
       // Retry the sidebar tree embed until the sidebar column renders.
-      if (!this.sidebarInjected) {
-        const sidebar = this.frame !== null ? findSidebarIn(this.frame) : findSidebar()
-        if (sidebar !== null) this.embedSidebarTree(sidebar)
-      }
+      if (!this.sidebarInjected && sidebar !== null) this.embedSidebarTree(sidebar)
       this.bindTitlebar()
       this.bindSettingsTrigger()
-      this.apply()
+      this.scheduleApply()
     }
-    this.waitObserver = new MutationObserver(() => { tryAttach() })
+    // body 子树变动里只有少部分与布局有关（会话列表重建、侧栏结构变化、
+    // 宿主重挂 frame）。**会话消息滚动**会在对话滚动区内大量挂载/卸载节点，
+    // 那与布局无关——若每次都调度 apply，滚动期间每帧都要跑全量重排（滚动
+    // 卡顿 + 闪屏的主因）。这里按 mutation 目标做相关性过滤，无关变动直接跳过。
+    this.waitObserver = new MutationObserver((records) => {
+      if (records.some((record) => this.isLayoutRelevant(record.target))) tryAttach()
+    })
     this.waitObserver.observe(document.body, { childList: true, subtree: true })
     tryAttach()
+  }
+
+  /**
+   * 该 mutation 目标是否可能影响本插件管理的布局。
+   * 排除两类噪声：① 对话滚动区内部（消息挂载/卸载/内容更新，与布局无关）
+   * ② 本插件自己的 host 内部（文件树/编辑器/工作台由自身 React 管理）。
+   */
+  private isLayoutRelevant(target: Node): boolean {
+    const el = target.nodeType === 1 ? (target as HTMLElement) : target.parentElement
+    if (el === null) return false
+    if (el.closest('[data-conversation-scroll]') !== null) return false
+    if (el.closest('[data-ide-sidebar-tree],[data-ide-workbench]') !== null) return false
+    return true
   }
 
   /** 跟踪原生标题栏高度变化（窗口控制区叠加 geometrychange / 皮肤调整都会改它
    *  的高度）：高度变化 → apply() 重测 topInset。标题栏元素被宿主重建时重新绑定。 */
   private bindTitlebar(): void {
     if (this.titlebarObserver === null) {
-      this.titlebarObserver = new ResizeObserver(() => this.apply())
+      this.titlebarObserver = new ResizeObserver(() => this.scheduleApply())
     }
     const titlebar = document.querySelector<HTMLElement>('[class*="titlebar" i]')
     if (titlebar === null || titlebar === this.titlebarObserved) return
@@ -233,7 +465,7 @@ export class IdeLayoutController {
    *  按钮被宿主重建时自动重绑。选择器与皮肤检测设置的信号一致。 */
   private bindSettingsTrigger(): void {
     if (this.settingsObserver === null) {
-      this.settingsObserver = new MutationObserver(() => this.apply())
+      this.settingsObserver = new MutationObserver(() => this.scheduleApply())
     }
     const trigger = document.querySelector("[data-slot='sidebar.settings'] > :is(button, [role='button'])")
     if (trigger === null || trigger === this.settingsObserved) return
@@ -342,23 +574,31 @@ export class IdeLayoutController {
     // 侧栏整列卡片化后有 margin-left 悬浮，「元素宽度」不再等于「左缘到右缘的
     // 绝对位置」——统一改用右缘 rect.right，下游 left/width 算术自动对齐。
     this.sidebarObserver = new ResizeObserver(() => {
-      const sidebar = this.frame !== null ? findSidebarIn(this.frame) : findSidebar()
-      if (sidebar !== null) this.sidebarWidth = sidebar.getBoundingClientRect().right
-      this.apply()
+      const sidebar = this.sidebarObserved
+      if (sidebar === null) return
+      const right = this.readSidebarRight(sidebar)
+      if (right === null) return
+      if (shouldSyncSidebarImmediately(this.dragMode, this.sidebarWidth, right)) {
+        this.sidebarWidth = right
+        // ResizeObserver 已拿到 DSH 原生手柄真实生效的宽度；在同一 delivery
+        // 直达轻量几何，不能再多等一帧 rAF，否则会露出侧栏与编辑器之间的空档。
+        this.apply(true)
+        return
+      }
+      this.sidebarWidth = right
+      this.scheduleApply()
     })
-    const sidebar = this.frame !== null ? findSidebarIn(this.frame) : findSidebar()
-    if (sidebar !== null) this.sidebarObserver.observe(sidebar)
 
     this.chatHandle = this.createChatHandle()
     // WCO（桌面无边框窗口）标题栏几何变化 → 重测 fixed 元素的 top 偏移。
     const overlay = wco()
     if (overlay !== undefined && this.wcoGeometryHandler === null) {
-      this.wcoGeometryHandler = () => this.apply()
+      this.wcoGeometryHandler = () => this.scheduleApply()
       overlay.addEventListener('geometrychange', this.wcoGeometryHandler)
     }
-    this.disposers.push(this.layout.subscribe(() => this.apply()))
+    this.disposers.push(this.layout.subscribe(() => this.scheduleApply()))
     // 编辑区显隐（editorVisible）变化时同步布局
-    this.disposers.push(this.ide.subscribe(() => this.apply()))
+    this.disposers.push(this.ide.subscribe(() => this.scheduleApply()))
   }
 
   /** Track the details column (affects the width budget). */
@@ -366,7 +606,7 @@ export class IdeLayoutController {
     this.detailsObserver = new ResizeObserver(() => {
       const details = this.frame?.querySelector<HTMLElement>('[class*="detailsCol"]') ?? null
       this.detailsWidth = details === null ? 0 : details.getBoundingClientRect().width
-      this.apply()
+      this.scheduleApply()
     })
     const details = this.frame?.querySelector<HTMLElement>('[class*="detailsCol"]') ?? null
     this.detailsWidth = details === null ? 0 : details.getBoundingClientRect().width
@@ -375,6 +615,8 @@ export class IdeLayoutController {
 
   /** 文件树高度（px），可拖拽调整，持久化到 localStorage。 */
   private treeHeight = 0
+  /** 文件树 host 所在侧栏 root 容器（fitTreeHeight 测量列表实际占高用）。 */
+  private sidebarRootEl: HTMLElement | null = null
   /** 被加了 paddingBottom 的滚动元素 + 其原始值（dispose 时恢复）。 */
   private paddedScrollEl: HTMLElement | null = null
   private paddedScrollOriginal = ''
@@ -407,12 +649,23 @@ export class IdeLayoutController {
     host.dataset.ideSidebarTree = ''
     // 卡片化（VS Code 式分区）：整圈细描边 + 圆角，四周 4px 离侧栏邻居
     // （上：会话列表；下：设置按钮；左右：侧栏边缘），悬浮卡片观感。
-    host.style.cssText = 'flex:none;height:clamp(200px, 46vh, 720px);'
+    // 高度不写死：由 fitTreeHeight() 按「侧栏空间预算」算出（含列表最小空间
+    // 保证），再写内联 height。
+    host.style.cssText = 'flex:none;'
       + 'overflow:hidden;display:flex;flex-direction:column;'
       + 'background:var(--dsw-alias-bg-base,#ffffff);min-height:120px;'
-      + 'margin:4px;border-radius:' + CARD_RADIUS + 'px;'
+      + 'margin:4px 8px 4px 4px;border-radius:' + CARD_RADIUS + 'px;'
       + 'border:1px solid var(--ide-border,#e5e6eb);'
       + 'box-shadow:0 1px 6px rgba(0,0,0,0.06);'
+    // 树列表滚动条隐藏（VS Code 同款）：经典滚动条占掉卡片右缘 ~9px，左右
+    // 观感不对称（都督反馈）；滚轮/触控板滚动不受影响。幂等注入，卸载保留。
+    if (document.getElementById('dsh-ide-layout-tree-scrollbar-style') === null) {
+      const scrollbarStyle = document.createElement('style')
+      scrollbarStyle.id = 'dsh-ide-layout-tree-scrollbar-style'
+      scrollbarStyle.textContent = '[data-ide-sidebar-tree]{scrollbar-width:none}'
+        + '[data-ide-sidebar-tree] *::-webkit-scrollbar{width:0;height:0}'
+      document.head.appendChild(scrollbarStyle)
+    }
     // 插入 regionArea 之后、footArea 之前
     const regionEl = rootEl.querySelector<HTMLElement>('[class*="regionArea"]')
     const footEl = rootEl.querySelector<HTMLElement>('[class*="footArea"]')
@@ -425,11 +678,10 @@ export class IdeLayoutController {
     }
     sidebarTreeHost = host
 
-    // 文件树高度：默认 clamp(200px,46vh,720px)，可从顶部手柄拖拽（min 120 / max 85vh）
+    // 文件树高度：默认 46vh（受列表最小空间约束），可拖拽覆盖（min 120 / max 85vh）
     this.treeHeight = this.loadTreeHeight()
-    if (this.treeHeight > 0) {
-      host.style.height = `${this.treeHeight}px`
-    }
+    this.sidebarRootEl = rootEl
+    this.fitTreeHeight()
     const handle = document.createElement('div')
     handle.dataset.ideTreeHandle = ''
     handle.style.cssText = 'position:absolute;top:-4px;left:0;right:0;height:8px;cursor:row-resize;z-index:6;'
@@ -441,9 +693,16 @@ export class IdeLayoutController {
       event.preventDefault()
       const startY = event.clientY
       const startHeight = host.getBoundingClientRect().height
-      const maxH = window.innerHeight * 0.85
+      // 上限同时受「列表最小空间」约束：拖高也不能把会话列表压没。
+      // 列表区与文件树此消彼长（1:1），故当前列表高度超出 MIN_LIST_PX 的部分
+      // 就是文件树还能再长的高度。
+      const regionEl = this.sidebarRootEl?.querySelector<HTMLElement>('[class*="regionArea"]') ?? null
+      const regionRoom = regionEl === null
+        ? 0
+        : Math.max(0, regionEl.getBoundingClientRect().height - MIN_LIST_PX)
+      const maxH = Math.min(window.innerHeight * TREE_MAX_RATIO, startHeight + regionRoom)
       const onMove = (moveEvent: PointerEvent): void => {
-        const next = Math.max(120, Math.min(startHeight + (startY - moveEvent.clientY), maxH))
+        const next = Math.max(TREE_MIN_PX, Math.min(startHeight + (startY - moveEvent.clientY), maxH))
         host.style.height = `${next}px`
         this.saveTreeHeight(next)
       }
@@ -457,6 +716,37 @@ export class IdeLayoutController {
     host.appendChild(handle)
     // 文件树容器需要 position:relative 才能定位手柄
     if (getComputedStyle(host).position === 'static') host.style.position = 'relative'
+  }
+
+  /**
+   * 按侧栏空间预算设置文件树高度：默认 root 高度的 46%，并保证工作区/会话
+   * 列表区不少于 MIN_LIST_PX。
+   *
+   * 用**实测收敛**而非推算：列表区是 flex:1、文件树是 flex:none 固定高，
+   * 二者在同一 flex 容器里此消彼长（缩文件树 1px → 列表长 1px）。因此直接量
+   * 列表区当前高度与目标的差值，把它加到文件树高度上即可一步收敛——不依赖
+   * 固定行/内边距/gap 的任何推算（root 内的 padding/gap 曾让推算差 ~32px）。
+   */
+  private fitTreeHeight(): void {
+    const host = sidebarTreeHost
+    if (host === null) return
+    const root = this.sidebarRootEl
+    if (root === null) return
+    const rootH = root.clientHeight
+    if (rootH <= 0) return
+    const region = root.querySelector<HTMLElement>('[class*="regionArea"]')
+    if (region === null) return
+    const regionH = region.getBoundingClientRect().height
+    if (regionH <= 0) return
+
+    const hostH = host.getBoundingClientRect().height
+    const desired = this.treeHeight > 0 ? this.treeHeight : rootH * TREE_DEFAULT_RATIO
+    // 一步收敛：把「列表缺的空间」从文件树上扣掉；列表已够高则按期望值走。
+    const deficit = MIN_LIST_PX - regionH
+    const wanted = deficit > 0 ? hostH - deficit : desired
+    const upper = Math.min(rootH * TREE_MAX_RATIO, hostH + Math.max(0, regionH - MIN_LIST_PX))
+    const next = Math.min(Math.max(wanted, TREE_MIN_PX), Math.max(upper, TREE_MIN_PX))
+    if (Math.abs(next - hostH) >= 1) host.style.height = `${Math.round(next)}px`
   }
 
   /** 文件树高度持久化：localStorage（会话级布局偏好）。 */
@@ -488,24 +778,68 @@ export class IdeLayoutController {
     // z-index 与 workbench 同层（10，主内容层）：宿主浮层（设置页，z-20）打开时
     // 手柄在其下不抢点击；与 workbench 同 z 靠 DOM 顺序保持在其上方可拖拽。
     el.style.cssText = 'position:fixed;top:0;bottom:0;z-index:10;cursor:col-resize;width:8px;margin-left:-4px;'
-      + 'background:transparent;'
+      + 'background:transparent;touch-action:none;user-select:none;'
     el.addEventListener('mouseenter', () => { el.style.background = 'rgba(127,127,127,0.35)' })
     el.addEventListener('mouseleave', () => { el.style.background = 'transparent' })
     el.addEventListener('pointerdown', (event: PointerEvent) => {
+      if (!canStartDrag(this.dragMode, event.isPrimary, event.button)) return
       event.preventDefault()
       const startX = event.clientX
       const startWidth = this.layout.getSnapshot().chatWidth
-      const onMove = (moveEvent: PointerEvent): void => {
-        // 手柄左移（clientX 减小）= 聊天区左边界左移 = 聊天区变宽，所以取反
-        const width = Math.max(MIN_CHAT_PX, startWidth + (startX - moveEvent.clientX))
+      const pointerId = event.pointerId
+      let dragFrame = 0
+      let pendingX = startX
+      this.dragMode = 'chat'
+      if (this.applyFrame !== null) {
+        cancelAnimationFrame(this.applyFrame)
+        this.applyFrame = null
+      }
+      try {
+        el.setPointerCapture(pointerId)
+      } catch {
+        // 少数环境拒绝 capture 时仍由当前元素事件继续处理。
+      }
+
+      const flush = (): void => {
+        dragFrame = 0
+        // 手柄左移（clientX 减小）= 聊天区左边界左移 = 聊天区变宽，所以取反。
+        // 更新和可见几何落位必须在同一 rAF，不能再由订阅额外排下一帧。
+        const width = chatWidthFromDrag(this.availableWidth(), startWidth, startX, pendingX)
+        if (width === this.layout.getSnapshot().chatWidth) return
         this.layout.update((prev) => ({ ...prev, chatWidth: width }))
+        this.apply(true)
       }
-      const onUp = (): void => {
-        window.removeEventListener('pointermove', onMove)
-        window.removeEventListener('pointerup', onUp)
+      const onMove = (moveEvent: PointerEvent): void => {
+        if (moveEvent.pointerId !== pointerId) return
+        pendingX = moveEvent.clientX
+        if (dragFrame === 0) dragFrame = requestAnimationFrame(flush)
       }
-      window.addEventListener('pointermove', onMove)
-      window.addEventListener('pointerup', onUp)
+      const finish = (finalX?: number): void => {
+        if (finalX !== undefined) pendingX = finalX
+        if (dragFrame !== 0) cancelAnimationFrame(dragFrame)
+        dragFrame = 0
+        flush()
+        if (this.dragMode === 'chat') this.dragMode = 'none'
+        try {
+          if (el.hasPointerCapture(pointerId)) el.releasePointerCapture(pointerId)
+        } catch {
+          // capture 未建立或已被宿主释放时无需处理。
+        }
+        el.removeEventListener('pointermove', onMove)
+        el.removeEventListener('pointerup', onUp)
+        el.removeEventListener('pointercancel', onCancel)
+        // 松手后只排一次完整布局，收敛文件树等非拖拽几何。
+        this.scheduleApply()
+      }
+      const onUp = (upEvent: PointerEvent): void => {
+        if (upEvent.pointerId === pointerId) finish(upEvent.clientX)
+      }
+      const onCancel = (cancelEvent: PointerEvent): void => {
+        if (cancelEvent.pointerId === pointerId) finish()
+      }
+      el.addEventListener('pointermove', onMove)
+      el.addEventListener('pointerup', onUp)
+      el.addEventListener('pointercancel', onCancel)
     })
     document.body.appendChild(el)
     return el
@@ -515,7 +849,18 @@ export class IdeLayoutController {
    *  中栏按需显隐：编辑区（editorVisible）与终端面板（termVisible）都关闭时
    *  回到原生两栏（工作区 sidebar | agent chat）；任一打开即显示中栏——
    *  终端独立于编辑区（不开编辑区也能开终端，VS Code 底部面板行为）。 */
-  private apply(): void {
+  private apply(dragging = false): void {
+    // 执行期间的 DOM 变动不重新调度（否则「apply 写样式 → 触发 waitObserver →
+    // 又调度 apply」会自激），本帧结束后由下一次真实变动/尺寸变化再触发。
+    this.applying = true
+    try {
+      this.applyInner(dragging)
+    } finally {
+      this.applying = false
+    }
+  }
+
+  private applyInner(dragging = false): void {
     // 皮肤装饰带（顶部飘带 + 底部饰带）**整体隐藏**：
     // top-trim：纯装饰（蕾丝布纹，无任何功能内容），却占据标题栏与 agent 卡
     // 之间的整个顶部条带——会话头部半透明地叠在它上面，导致顶部永远无法做
@@ -528,20 +873,20 @@ export class IdeLayoutController {
     // 圆角，agent 区下方气隙消失。同为纯装饰（pointer-events:none + aria-hidden
     // 花边贴图），与 top-trim 同款理由隐藏；隐藏后欢迎页底部呈现「卡底缘 +
     // 绿气隙 + 窗底」三段式，会话页无感。皮肤自身的平移逻辑保留不动。
-    for (const selector of ['[data-skin-chrome="top-trim"]', '[data-skin-chrome="bottom-trim"]']) {
-      const trim = document.querySelector<HTMLElement>(selector)
-      if (trim !== null && trim.style.display !== 'none') trim.style.display = 'none'
+    if (!dragging) {
+      for (const selector of ['[data-skin-chrome="top-trim"]', '[data-skin-chrome="bottom-trim"]']) {
+        const trim = document.querySelector<HTMLElement>(selector)
+        if (trim !== null && trim.style.display !== 'none') trim.style.display = 'none'
+      }
     }
     const state = this.layout.getSnapshot()
     const ideSnapshot = this.ide.getSnapshot()
     const panelVisible = ideSnapshot.editorVisible || ideSnapshot.termVisible
-    const frameW = this.frameWidth > 0 ? this.frameWidth : window.innerWidth
-    const total = Math.max(0, frameW - this.sidebarWidth - this.detailsWidth)
+    const total = this.availableWidth()
 
     // Workbench = total - chat; chat clamps so the workbench keeps its floor.
-    const maxChat = Math.max(MIN_CHAT_PX, total - EDITOR_MIN)
-    const chat = Math.min(Math.max(MIN_CHAT_PX, state.chatWidth), maxChat)
-    const work = panelVisible ? Math.max(EDITOR_MIN, total - chat) : 0
+    const chat = clampChatWidth(total, state.chatWidth)
+    const work = panelVisible ? Math.max(EDITOR_MIN_PX, total - chat) : 0
     const settings = settingsOpen()
     // 设置面板开着 → 编辑器外壳整体让位（下方 shown 判定）。中栏 margin 必须
     // 同步归零：面板困在侧栏受限层叠上下文里，编辑器 display:none 后挤压还在
@@ -565,8 +910,8 @@ export class IdeLayoutController {
       // 显式宽高（治本）：宿主布局对 centerCol 的宽高是显式接管式的——
       // margin-left/top（推位置）生效，但 margin-right/bottom（需收缩宽高）
       // 无效 → agent 卡右/底贴死窗缘，右侧和底部根本没有气隙（outline 画在
-      // 窗外被裁）。宽高的**精确公式在下方 nativeInset 之后统一设置**
-      // （只用「实测 rect + 窗口尺寸」两个可靠量，零间接测量）。
+      // 窗外被裁）。宽高会在 nativeInset 得出后、气隙外框读取矩形前同步写入，
+      // 只用「实测 rect + 窗口尺寸」两个可靠量，零间接测量。
       // 裁切窗口外扩 GAP、圆角 R+GAP：盒内等效弧 = 22−6 = 16px，与原来
       // inset(0 round 16) 逐点一致（内容圆角裁切不变），但放行了画在盒外
       // GAP 的绿环——clip-path 裁掉元素全部绘制输出（含自身 box-shadow），
@@ -584,23 +929,25 @@ export class IdeLayoutController {
       // 顺带把卡圆角轮廓衬出来。important 写入防皮肤透明规则，dispose 还原。
       centerCol.style.setProperty('box-shadow', `0 0 0 ${CARD_GAP}px ${WORKBENCH_CANVAS_COLOR}`, 'important')
     }
-    // 会话头部文字染深（治「看不清」）：皮肤把头部文字染米白 #f8f3e8 + 深色
-    // text-shadow，前提是深蓝飘带（navy band）在背后衬托（皮肤 CSS 注释自述
-    // 「The trim backs the conversation header」）——本场飘带整体隐藏后衬底
-    // 消失，米白字叠在白纱洗浅的卡面上对比崩。内联染深即无需 important（皮肤
-    // 这些规则未带 important，内联天然覆盖）；只染 header 本身、靠皮肤的
-    // color:inherit 链传导，按钮不单独设色 → 皮肤 hover 金色效果保留。
-    // querySelector 取文档序第一个匹配（会话头部在卡顶，工具卡的同名片段
-    // 类在其后，不会误中）。
-    const chatHeader = centerCol !== null
-      ? centerCol.querySelector<HTMLElement>('header[class*="header"]')
-      : null
-    if (chatHeader !== null) {
-      chatHeader.style.color = '#1f2c55'
-      chatHeader.style.textShadow = 'none'
-      // 次级读数（计数/说明/meta）被皮肤独立规则钉了浅蓝灰（不吃 inherit），逐个内联压回。
-      for (const el of chatHeader.querySelectorAll<HTMLElement>('[class*="counter"], [class*="caption"], [class*="meta"]')) {
-        el.style.color = '#5b6b96'
+    if (!dragging) {
+      // 会话头部文字染深（治「看不清」）：皮肤把头部文字染米白 #f8f3e8 + 深色
+      // text-shadow，前提是深蓝飘带（navy band）在背后衬托（皮肤 CSS 注释自述
+      // 「The trim backs the conversation header」）——本场飘带整体隐藏后衬底
+      // 消失，米白字叠在白纱洗浅的卡面上对比崩。内联染深即无需 important（皮肤
+      // 这些规则未带 important，内联天然覆盖）；只染 header 本身、靠皮肤的
+      // color:inherit 链传导，按钮不单独设色 → 皮肤 hover 金色效果保留。
+      // querySelector 取文档序第一个匹配（会话头部在卡顶，工具卡的同名片段
+      // 类在其后，不会误中）。
+      const chatHeader = centerCol !== null
+        ? centerCol.querySelector<HTMLElement>('header[class*="header"]')
+        : null
+      if (chatHeader !== null) {
+        chatHeader.style.color = '#1f2c55'
+        chatHeader.style.textShadow = 'none'
+        // 次级读数（计数/说明/meta）被皮肤独立规则钉了浅蓝灰（不吃 inherit），逐个内联压回。
+        for (const el of chatHeader.querySelectorAll<HTMLElement>('[class*="counter"], [class*="caption"], [class*="meta"]')) {
+          el.style.color = '#5b6b96'
+        }
       }
     }
     // fixed 元素从原生标题栏下方开始（无标题栏 → 0，原行为）。探针 x 取
@@ -611,6 +958,15 @@ export class IdeLayoutController {
     // 下缘才开始铺，最上一段会露出透图底（踩过）。
     const nativeInset = nativeTopInset(this.sidebarWidth + 40)
     const topInset = Math.max(nativeInset, skinTopTrimInset())
+    // 先在同一轮布局里收敛 agent 卡尺寸，再读取 chatRect 更新气隙外框。
+    // 拖拽会改变 margin-left；若先读取矩形再回填宽度，就会得到「新左缘 +
+    // 上一帧旧宽度」的混合几何，右侧气隙会在拖动帧短暂拉长。
+    if (centerCol !== null) {
+      centerCol.style.marginTop = `${CARD_GAP}px`
+      const rect = centerCol.getBoundingClientRect()
+      centerCol.style.width = `${Math.max(0, window.innerWidth - rect.left - CARD_GAP)}px`
+      centerCol.style.height = `${Math.max(0, window.innerHeight - rect.top - CARD_GAP)}px`
+    }
     // 设置面板打开期间整个编辑器外壳让位（display:none，DOM/状态保留，关面板
     // 后恢复）——设置模态困在侧边栏的受限层叠上下文里，z-index 无解，唯有不渲染。
     // settings 已在上方中栏 margin 处计算（两处必须同源联动）。
@@ -672,7 +1028,8 @@ export class IdeLayoutController {
         stage.style.clipPath = `inset(${chatRect.top}px ${window.innerWidth - chatRect.right}px ${window.innerHeight - chatRect.bottom}px ${chatRect.left}px round ${CARD_RADIUS}px)`
       }
     }
-    // 侧栏整列卡片化：圆角 + 内容裁切 + 左/下悬浮 margin（4px）+ **顶部气隙**。
+    if (!dragging) {
+      // 侧栏整列卡片化：圆角 + 内容裁切 + 左/下悬浮 margin（4px）+ **顶部气隙**。
     // **margin-top 是绝对禁区**：maid-atelier 皮肤运行时会测量侧栏渲染顶边写入
     // --maid-titlebar-height，飘带 top 直接用它——侧栏 margin-top 一动，飘带跟
     // 着坠、全局连锁崩坏（踩过）。
@@ -689,11 +1046,19 @@ export class IdeLayoutController {
       sidebarEl.style.marginLeft = `${CARD_GAP}px`
       sidebarEl.style.marginBottom = `${CARD_GAP}px`
     }
+    // 文件树高度随侧栏尺寸重算（窗口高度变化 → 46vh 变化 → 列表可视区跟着
+    // 忽大忽小，是「工作区/会话显示不全，过一会又好了」的成因）。apply 由
+    // 侧栏 ResizeObserver / 窗口 resize / 容器增删触发，这里统一收敛。
+    this.fitTreeHeight()
+    }
+    // 侧栏气隙框：**拖拽帧也必须跟随**——绿色边框冻在起始几何，是都督截图里
+    // 「拖动中外形不对称/盖住一点」的可见元凶之一。侧栏 rect 此时已是新值。
     if (this.sidebarFrameHost !== null) {
       // 侧栏气隙框几何：盒 = [0, 侧栏右缘] × [侧栏顶, 窗底]（方角），左带 =
       // 实测 margin-left 缝宽、底带 = 实测 margin-bottom 缝宽；顶/右不出带
       // （顶部气隙维持现状，右侧缝由 chatFrame 的 border-left 衔接）。带只
       // 画在侧栏盒外的缝区（content 区透明），不遮侧栏内容与皮肤金线投影。
+      const sidebarEl = this.frame !== null ? findSidebarIn(this.frame) : findSidebar()
       const sidebarRect = sidebarEl !== null ? sidebarEl.getBoundingClientRect() : null
       if (sidebarRect !== null && sidebarRect.width > 0 && sidebarRect.height > 0) {
         this.sidebarFrameHost.style.display = 'block'
@@ -709,28 +1074,27 @@ export class IdeLayoutController {
         this.sidebarFrameHost.style.setProperty('border-width', '0', 'important')
       }
     }
-    // agent 卡顶部气隙：**只留气隙本身的宽度**。centerCol 是 grid 内元素，其
-    // 自然起点已在标题栏下方（~40px，与侧栏同排）——margin 若再叠加 nativeInset
-    // 会双重补偿，气隙膨胀到 ~60px（踩过）。
-    // 显式宽高（治本终版）：**只用两个最可靠的量**——实测 rect.left/top（margin
-    // 左/上生效，多轮验证稳定）+ 窗口尺寸——零间接测量（total/sidebarWidth 的
-    // 测量偏差曾让右缝差 ~10px，踩过）。width/height 显式接管后：
-    // 右缘 = 窗右 - GAP、底缘 = 窗底 - GAP，右/底气隙真实存在。
-    if (centerCol !== null) {
-      centerCol.style.marginTop = `${CARD_GAP}px`
-      const rect = centerCol.getBoundingClientRect()
-      centerCol.style.width = `${Math.max(0, window.innerWidth - rect.left - CARD_GAP)}px`
-      centerCol.style.height = `${Math.max(0, window.innerHeight - rect.top - CARD_GAP)}px`
-    }
-    // 布局应用完成信号：供悬浮元素（如 TermFab 跟随 Session log）等外部监听
-    // 者做几何重测——事件驱动，避免轮询。
-    window.dispatchEvent(new CustomEvent('dsh-ide-layout-applied'))
+    // 布局应用完成信号：供置顶条、TermFab 等 body portal 浮层跟随几何。
+    // 拖拽帧也必须派发；它们不在 layout DOM 树内，无法从样式变化自行得知新坐标。
+    window.dispatchEvent(new CustomEvent('dsh-ide-layout-applied', { detail: { dragging } }))
   }
 
   /** Detach everything (plugin unload). */
   dispose(): void {
     this.waitObserver?.disconnect()
     this.sidebarObserver?.disconnect()
+    this.sidebarHandleAbort?.abort()
+    this.sidebarHandleAbort = null
+    this.sidebarDragAbort?.abort()
+    this.sidebarDragAbort = null
+    this.sidebarObserved = null
+    this.sidebarHandleObserved = null
+    this.sidebarDragPointerId = null
+    this.dragMode = 'none'
+    if (this.applyFrame !== null) {
+      cancelAnimationFrame(this.applyFrame)
+      this.applyFrame = null
+    }
     this.frameObserver?.disconnect()
     this.detailsObserver?.disconnect()
     this.footObserver?.disconnect()
@@ -807,6 +1171,7 @@ export class IdeLayoutController {
       sidebarTreeHost.remove()
       sidebarTreeHost = null
     }
+    this.sidebarRootEl = null
     this.frame = null
     this.sidebarInjected = false
   }

@@ -2,6 +2,35 @@
 
 本项目版本与更新记录。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [1.8.0] - 2026-09-12
+
+DSH Desktop 2.0.9 适配 + 实时性专项：固定浮层同帧跟随、侧栏拖拽帧接管、长列表逐帧重排治理、事件链去轮询。
+
+### 新增
+
+- **原生侧栏拖拽帧接管**：拖拽期间由插件按指针位移**纯算术**直写分栏网格（`grid-template-columns` 弹性中列）、手柄位置与侧栏内容列宽度——零 DOM 读取、零 React 状态往返；宿主逐帧 `onDrag → setSidebar → 全树重渲染`（实测单帧 ~85ms，整窗掉到 ~12fps）被 capture 阶段拦截。松手时同步补发终值合成 `pointermove`，随真实 `pointerup` 由宿主手动冲刷**一次性交还**（整场仅一次 React 提交，宽度持久化无缝）。网格/内容列均按**结构定位**（运行时类名是 CSS Modules 哈希，不能按类名匹配）；宽度钳制与 DSH 原生一致（264–420px）；解析失败自动退回观察模式。
+- **布局完成事件携带拖拽标记**：`dsh-ide-layout-applied` 移出 `!dragging` 分支、每帧派发并带 `detail.dragging`——置顶条 / MessageNav / TermFab 等 body portal 浮层得以逐帧同帧跟随。
+- **会话长列表逐帧重排治理**：注入 `content-visibility: auto` + `contain-intrinsic-size`（视口外消息行跳过排版与绘制），分栏拖动单帧排版成本 ~85ms → ~3ms，长会话滚动同步受益。
+- **chat-resize 纯函数模块**：聊天宽度钳制、拖拽起点/终点校验、侧栏即时同步阈值（0.5px）抽出为可测纯函数。
+
+### 变更
+
+- **文件树滚动条隐藏**（VS Code 同款）：经典滚动条占位导致卡片右缘不对称，改隐藏（滚轮/触控板不受影响）；卡片右边距 4 → 8px、列表右内边距 +10px，左右缝隙与体积数字留白对称。
+- **Git 自动刷新冷却期不丢事件**：5s 冷却 / busy 期间的 fs 变更改为记账，冷却结束或操作完成后仅补刷一次（保留 1s 保存风暴防抖）。
+- **文件监听降级去轮询**：递归 `fs.watch` 不可用时不再 3 秒 root-signature 轮询，改为目录级 watcher 集合 + 拓扑事件重建（深层变更无 3 秒延迟、无漏报）。
+- **MessageNav / TermFab 监听收窄**：滚动区被宿主替换后 ResizeObserver 重绑；布局几何变化改由布局完成事件驱动（同帧测量直写），不再依赖广域 body mutation 偶然触发；TermFab 仅会话头整体替换时重探，消息流式写入零测量。
+
+### 修复
+
+- **工作区/会话列表显示不全**：文件树固定 `clamp(200px,46vh,720px)` 压挤列表区（19 条会话仅 4 条完整可见、46vh 随窗口浮动）→ `fitTreeHeight()` 实测收敛法（树高让位、列表保底 360px），拖拽上限同步受列表保底约束。
+- **拖拽/滚动卡顿闪屏**：`apply()` rAF 合并 + `applying` 守卫断自激、body MutationObserver 相关性过滤（会话滚动区/插件宿主内变动跳过）、MessageNav 移除 2 秒轮询改滚动 rAF、聊天手柄 Pointer Capture + 松手收敛。
+- **侧栏绿框拖拽帧跟随**：sidebarFrameHost 几何更新移出 `!dragging` 分支，拖动中绿框实时贴合侧栏新缘。
+- **官方对话宽度手柄遮挡**：隐藏宿主 `.widthHandle[data-side=left|right]`（原生 sidebar 手柄保留，供宿主维护侧栏宽度）。
+
+### 测试
+
+- 13 文件 / 127 项单测全绿（新增 chat-resize 7 项）；typecheck / build / `git diff --check` 通过。
+
 ## [1.7.2] - 2026-09-06
 
 悬浮终端钮会话页显隐：欢迎页（还没发生会话）右上角不再出现悬浮终端钮。

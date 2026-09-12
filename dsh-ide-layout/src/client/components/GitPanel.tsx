@@ -95,9 +95,10 @@ export function GitPanel({ root, gitTick }: GitPanelProps): JSX.Element {
   const [repoCounts, setRepoCounts] = useState<Record<string, number>>({})
   /** repos 的 ref 镜像：refreshRepoCounts 在异步回调里读最新列表。 */
   const reposRef = useRef<GitRepoInfo[]>([])
-  /** 自动刷新状态：上次刷新的时间戳 + 挂起的防抖 timer（卸载时清理）。 */
+  /** 自动刷新状态：冷却内的事件必须记账，结束后仅补一次最新状态。 */
   const lastAutoRefresh = useRef(0)
   const autoRefreshTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const pendingAutoRefresh = useRef(false)
   /** busy 的 ref 镜像：自动刷新在 timer 里执行，闭包拿不到最新 busy。 */
   const busyRef = useRef(false)
   useEffect(() => { busyRef.current = busy }, [busy])
@@ -191,24 +192,39 @@ export function GitPanel({ root, gitTick }: GitPanelProps): JSX.Element {
   }, [activeRepo, root, refresh])
 
   // P4-01：fs 事件驱动自动刷新（对齐 VS Code 内置 Git）。
-  // gitTick 变化 → 1s 防抖合并保存风暴 → 5s 冷却内不再自动刷；
-  // 操作进行中（stage/commit 等）跳过，避免与写操作抢 git index 锁。
+  // gitTick 变化 → 1s 防抖合并保存风暴；冷却或 busy 期间只记最新事件，结束后补刷一次。
   const gitTickRef = useRef(0)
+  const scheduleAutoRefresh = useCallback((delay: number): void => {
+    if (autoRefreshTimer.current !== undefined) clearTimeout(autoRefreshTimer.current)
+    autoRefreshTimer.current = setTimeout(() => {
+      autoRefreshTimer.current = undefined
+      if (root === '') return
+      if (busyRef.current) {
+        pendingAutoRefresh.current = true
+        return
+      }
+      const remaining = AUTO_REFRESH_COOLDOWN_MS - (Date.now() - lastAutoRefresh.current)
+      if (remaining > 0) {
+        pendingAutoRefresh.current = true
+        scheduleAutoRefresh(remaining)
+        return
+      }
+      pendingAutoRefresh.current = false
+      lastAutoRefresh.current = Date.now()
+      refresh()
+      refreshRepoCounts()
+    }, delay)
+  }, [refresh, refreshRepoCounts, root])
   useEffect(() => {
     if (gitTick === gitTickRef.current) return
     gitTickRef.current = gitTick
     if (gitTick === 0 || root === '') return
-    if (autoRefreshTimer.current !== undefined) clearTimeout(autoRefreshTimer.current)
-    autoRefreshTimer.current = setTimeout(() => {
-      autoRefreshTimer.current = undefined
-      if (busyRef.current) return
-      const now = Date.now()
-      if (now - lastAutoRefresh.current < AUTO_REFRESH_COOLDOWN_MS) return
-      lastAutoRefresh.current = now
-      refresh()
-      refreshRepoCounts()
-    }, AUTO_REFRESH_DEBOUNCE_MS)
-  }, [gitTick, root, refresh])
+    pendingAutoRefresh.current = true
+    scheduleAutoRefresh(AUTO_REFRESH_DEBOUNCE_MS)
+  }, [gitTick, root, scheduleAutoRefresh])
+  useEffect(() => {
+    if (!busy && pendingAutoRefresh.current && autoRefreshTimer.current === undefined) scheduleAutoRefresh(0)
+  }, [busy, scheduleAutoRefresh])
 
   // 卸载时清理挂起的自动刷新 timer。
   useEffect(() => () => {

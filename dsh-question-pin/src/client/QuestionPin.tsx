@@ -56,6 +56,10 @@ function topTrimBottom(): number {
  * DOM 子树内（受限层叠上下文，非 body portal），压不过 body 层 z-12 的本置顶条
  * ——设置打开期间组件不渲染让位（ide-layout v1.5.1 编辑器让位同款方案）。
  * 宿主重建触发按钮后由 rebinder 重新绑定。
+ * 2.0.9 适配：触发按钮外多包了一层 triggerRow div（`BUTTON.MI-_Aa_trigger` 不再
+ * 是 slot 的直接子代），rebinder 原 `>` 直接子代选择器永久失配 → observer 从未
+ * 绑定 → 设置打开时胶囊不隐藏、压在设置模态上（CDP 实测 directChildHit:false）。
+ * 改为后代选择器（与 probe 同款），按钮节点变更时换绑。
  */
 function useSettingsOpen(): boolean {
   const [open, setOpen] = useState(false)
@@ -66,7 +70,7 @@ function useSettingsOpen(): boolean {
     let observed: Element | null = null
     const observer = new MutationObserver(probe)
     const rebinder = new MutationObserver(() => {
-      const trigger = document.querySelector("[data-slot='sidebar.settings'] > :is(button, [role='button'])")
+      const trigger = document.querySelector("[data-slot='sidebar.settings'] :is(button, [role='button'])")
       if (trigger !== null && trigger !== observed) {
         observed = trigger
         observer.observe(trigger, { attributes: true, attributeFilter: ['aria-expanded'] })
@@ -94,8 +98,37 @@ function QuestionPin(): JSX.Element | null {
   const [pin, setPin] = useState<{ text: string; left: number; top: number; width: number } | null>(null)
   const rowRef = useRef<HTMLElement | null>(null)
   const rafRef = useRef(0)
+  // 拖拽帧的定位直接写按钮 style（React state 提交晚一帧，会拖出可见拖尾）。
+  const btnRef = useRef<HTMLButtonElement | null>(null)
   // 设置面板打开 → 不渲染（见 useSettingsOpen 注释）
   const settingsOpen = useSettingsOpen()
+
+  // 几何计算 + 同帧直写（state 提交晚一帧，拖拽帧必须现在就位）。
+  // scan 与拖拽帧的轻量跟随共用这一段。
+  const applyGeometry = (): { left: number; top: number; width: number } => {
+    const chat = document.querySelector<HTMLElement>('[class*="centerCol"]')
+    const chatRect = chat?.getBoundingClientRect()
+    const scroller = document.querySelector<HTMLElement>(SCROLL_SELECTOR)
+    const scrollRect = scroller?.getBoundingClientRect()
+    const width = Math.max(240, (chatRect !== undefined ? chatRect.width : 600) - 24)
+    const left = (chatRect !== undefined ? chatRect.left : (window.innerWidth - width) / 2) + 12
+    const top = (scrollRect !== undefined && scrollRect.height > 0 ? scrollRect.top : (chatRect !== undefined ? chatRect.top : 0)) + 8
+    const btn = btnRef.current
+    if (btn !== null) {
+      btn.style.left = `${left}px`
+      btn.style.top = `${top}px`
+      btn.style.width = `${width}px`
+    }
+    return { left, top, width }
+  }
+
+  // 拖拽帧的轻量跟随：只重算几何直写。全量 scan 要遍历全部消息行定位第一条
+  // 可见行（长会话几百次 rect 读），每帧跑会把帧时间顶爆——表现为拖动抖动。
+  // 显隐与文案不随拖拽变化，由 scan 在滚动/内容变化/拖拽结束时负责。
+  const reposition = (): void => {
+    if (rowRef.current === null) return
+    applyGeometry()
+  }
 
   const scan = (): void => {
     const topBound = topTrimBottom()
@@ -141,15 +174,13 @@ function QuestionPin(): JSX.Element | null {
     // pin 悬浮在头部之下，不再压住「对话/静默」tab、Session log 与 TermFab，
     // 也不会拦截头部整条的点击（此前锚卡顶 + 8 正好叠在头部上）。找不到
     // 滚动容器时回退卡顶 + 8（原行为）。
-    const chat = document.querySelector<HTMLElement>('[class*="centerCol"]')
-    const chatRect = chat?.getBoundingClientRect()
-    const scroller = document.querySelector<HTMLElement>(SCROLL_SELECTOR)
-    const scrollRect = scroller?.getBoundingClientRect()
-    const width = Math.max(240, (chatRect !== undefined ? chatRect.width : 600) - 24)
-    const left = (chatRect !== undefined ? chatRect.left : (window.innerWidth - width) / 2) + 12
-    const top = (scrollRect !== undefined && scrollRect.height > 0 ? scrollRect.top : (chatRect !== undefined ? chatRect.top : 0)) + 8
+    const { left, top, width } = applyGeometry()
     const text = question.textContent?.replace(/\s+/g, ' ').trim() ?? ''
-    setPin({ text, left, top, width })
+    setPin((prev) => (
+      prev?.text === text && prev.left === left && prev.top === top && prev.width === width
+        ? prev
+        : { text, left, top, width }
+    ))
   }
 
   const scheduleScan = (): void => {
@@ -165,8 +196,18 @@ function QuestionPin(): JSX.Element | null {
     // 事件会经过 window 的 capture 路径，无需对宿主容器直接挂监听。
     const onScroll = (): void => scheduleScan()
     const onResize = (): void => scheduleScan()
+    // layout 已在当前拖拽帧写完 centerCol 几何：拖拽帧只做轻量几何直写（全量
+    // 行扫描每帧跑会掉帧），拖拽结束/普通布局收敛才做全量扫描。
+    const onLayoutApplied = (event: Event): void => {
+      if ((event as CustomEvent).detail?.dragging === true) {
+        reposition()
+        return
+      }
+      scan()
+    }
     window.addEventListener('scroll', onScroll, { capture: true, passive: true })
     window.addEventListener('resize', onResize, { passive: true })
+    window.addEventListener('dsh-ide-layout-applied', onLayoutApplied)
     // 消息流式更新（回答逐步长高/新消息插入）不触发滚动事件也要重扫：MutationObserver
     // 盯滚动容器子树，防抖 300ms。宿主容器重建（整树替换）后重新绑定观察目标。
     let mutationTimer: ReturnType<typeof setTimeout> | undefined
@@ -189,6 +230,7 @@ function QuestionPin(): JSX.Element | null {
     return () => {
       window.removeEventListener('scroll', onScroll, { capture: true })
       window.removeEventListener('resize', onResize)
+      window.removeEventListener('dsh-ide-layout-applied', onLayoutApplied)
       observer.disconnect()
       rebinder.disconnect()
       if (mutationTimer !== undefined) clearTimeout(mutationTimer)
@@ -200,6 +242,7 @@ function QuestionPin(): JSX.Element | null {
   return createPortal(
     <button
       type="button"
+      ref={btnRef}
       onClick={() => {
         const row = rowRef.current
         if (row !== null) row.scrollIntoView({ behavior: 'smooth', block: 'start' })

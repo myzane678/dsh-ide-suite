@@ -46,6 +46,43 @@ function injectDarkHighlightStyle(): void {
 }
 
 /**
+ * 隐藏对话区内部的内容宽度手柄。它们只调整 `--dsh-chat-content-width`，会在
+ * agent 区内部制造一条不可见却可拖拽的竖线；侧栏手柄必须保留，供宿主维护
+ * sidebar 宽度，编辑器通过 layout.ts 的 ResizeObserver 自动跟随。
+ */
+let conversationWidthHandleHiderInjected = false
+function injectConversationWidthHandleHider(): void {
+  if (conversationWidthHandleHiderInjected) return
+  conversationWidthHandleHiderInjected = true
+  // 热重载前的旧规则会同时禁用 sidebar；先移除，避免新旧规则叠加。
+  document.getElementById('dsh-ide-layout-hide-shell-handle')?.remove()
+  if (document.getElementById('dsh-ide-layout-hide-conversation-width-handle') !== null) return
+  const style = document.createElement('style')
+  style.id = 'dsh-ide-layout-hide-conversation-width-handle'
+  style.textContent = '[class*="widthHandle"][data-side="left"],[class*="widthHandle"][data-side="right"]'
+    + '{visibility:hidden !important;pointer-events:none !important;}'
+  document.head.appendChild(style)
+}
+
+/**
+ * 会话长列表的逐帧重排治理：侧栏/聊天区分栏拖动时，聊天列宽度每帧变化，
+ * 几百条消息行整棵重排 + 重绘（实测单帧 ~85ms → 全程 ~12fps，拖动抖动）。
+ * content-visibility:auto 让视口外的消息行跳过排版与绘制（Chromium 对该属性
+ * 有完善的滚动锚定与尺寸记忆），逐帧排版成本坍缩到视口内可见行。
+ */
+let conversationPerfStyleInjected = false
+function injectConversationPerformanceStyle(): void {
+  if (conversationPerfStyleInjected) return
+  conversationPerfStyleInjected = true
+  if (document.getElementById('dsh-ide-layout-conversation-perf') !== null) return
+  const style = document.createElement('style')
+  style.id = 'dsh-ide-layout-conversation-perf'
+  style.textContent = '[data-conversation-scroll] [data-chat-anchor-key]'
+    + '{content-visibility:auto;contain-intrinsic-size:auto 120px;}'
+  document.head.appendChild(style)
+}
+
+/**
  * 统计工作区未提交变更总数（Git 按钮角标）：
  * root 本身是仓库 → 直接用 status；否则汇总所有发现的嵌套仓库（多仓库工作区
  * 如 E:\dsh-plugins 下各插件仓库），任一仓库有改动角标都能反映。失败返回 0。
@@ -313,13 +350,15 @@ function TermFab({ api }: { api: IdeMountApi }): JSX.Element | null {
   const [pos, setPos] = useState(TERM_FAB_FALLBACK)
   /** 当前处于会话页：Session log 按钮探测到 = true。欢迎页/头部未渲染 = false。 */
   const [onSession, setOnSession] = useState(false)
+  // 拖拽帧的定位直接写按钮 style（state 提交晚一帧，会拖出可见拖尾）。
+  const btnRef = useRef<HTMLButtonElement | null>(null)
   useEffect(() => {
     // 跟随 Session log（**事件驱动，不轮询**）：位置变化的已知信号全接住——
     // ① 窗口 resize；② 布局插件 apply 完成（侧栏拖动/面板开合/装饰带处理，
-    //    layout.ts 派发 dsh-ide-layout-applied）；③ DOM 变化（头部出现/重建/类
-    //    切换；聊天流式更新也会触发观察，但探测幂等 + rAF 节流 + setPos 浅比
-    //    较，无位置变化零渲染）；④ 字体加载完成。rAF 把同帧多次信号合并成一
-    //    次探测。
+    //    layout.ts 派发 dsh-ide-layout-applied，同步探测 + 直写坐标同帧落位）；
+    // ③ DOM 变化（头部出现/重建/类切换；聊天流式更新也会触发观察，但探测幂等
+    //    + rAF 节流 + setPos 浅比较，无位置变化零渲染）；④ 字体加载完成。
+    //    rAF 把同帧多次信号合并成一次探测。
     const probe = (): void => {
       let target: HTMLElement | null = null
       for (const button of document.querySelectorAll<HTMLElement>("header[class*='header'] :is(button, [role='button'], a)")) {
@@ -333,25 +372,51 @@ function TermFab({ api }: { api: IdeMountApi }): JSX.Element | null {
         top: Math.round(rect.top + rect.height / 2 - 16),
         right: Math.round(window.innerWidth - rect.left + 12),
       }
+      // 同帧直写坐标；state 仅作后续渲染的初值/兜底。
+      const btn = btnRef.current
+      if (btn !== null) {
+        btn.style.top = `${next.top}px`
+        btn.style.right = `${next.right}px`
+      }
       setPos((prev) => (prev.top === next.top && prev.right === next.right ? prev : next))
     }
     let raf = 0
+    let header: HTMLElement | null = null
     const schedule = (): void => {
       if (raf !== 0) return
       raf = requestAnimationFrame(() => { raf = 0; probe() })
     }
-    schedule()
+    const resizeObserver = typeof ResizeObserver === 'function' ? new ResizeObserver(schedule) : null
+    const headerObserver = new MutationObserver(schedule)
+    const bindHeader = (): void => {
+      const next = document.querySelector<HTMLElement>("header[class*='header']")
+      if (next === header) return
+      resizeObserver?.disconnect()
+      headerObserver.disconnect()
+      header = next
+      if (header !== null) {
+        resizeObserver?.observe(header)
+        headerObserver.observe(header, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'style'] })
+      }
+      schedule()
+    }
+    // body 只负责发现会话头被整体替换；消息流式写入不再查询或测量 Session log。
+    const hostObserver = new MutationObserver(() => {
+      if (header === null || !header.isConnected) bindHeader()
+    })
+    hostObserver.observe(document.body, { childList: true, subtree: true })
+    bindHeader()
     window.addEventListener('resize', schedule)
-    window.addEventListener('dsh-ide-layout-applied', schedule)
+    // layout 已在本帧写完几何；同步探测 + 直写，不走 rAF/state 晚一帧。
+    const onLayoutApplied = (): void => probe()
+    window.addEventListener('dsh-ide-layout-applied', onLayoutApplied)
     void document.fonts.ready.then(schedule)
-    const observer = new MutationObserver(schedule)
-    observer.observe(document.body, { childList: true, subtree: true })
-    const header = document.querySelector("header[class*='header']")
-    if (header !== null) observer.observe(header, { attributes: true, attributeFilter: ['class', 'style'] })
     return () => {
       window.removeEventListener('resize', schedule)
-      window.removeEventListener('dsh-ide-layout-applied', schedule)
-      observer.disconnect()
+      window.removeEventListener('dsh-ide-layout-applied', onLayoutApplied)
+      resizeObserver?.disconnect()
+      headerObserver.disconnect()
+      hostObserver.disconnect()
       if (raf !== 0) cancelAnimationFrame(raf)
     }
   }, [])
@@ -361,6 +426,7 @@ function TermFab({ api }: { api: IdeMountApi }): JSX.Element | null {
   return createPortal(
     <button
       type="button"
+      ref={btnRef}
       title="打开终端"
       onClick={() => api.ide.update((prev) => ({ ...prev, termVisible: true }))}
       onMouseEnter={(event) => {
@@ -545,6 +611,8 @@ function Workbench({ api }: { api: IdeMountApi }): JSX.Element {
  */
 export function mountPanels(api: IdeMountApi): () => void {
   injectDarkHighlightStyle()
+  injectConversationWidthHandleHider()
+  injectConversationPerformanceStyle()
   let sidebarRoot: Root | undefined
   let workbenchRoot: Root | undefined
   const disposers: Array<() => void> = []

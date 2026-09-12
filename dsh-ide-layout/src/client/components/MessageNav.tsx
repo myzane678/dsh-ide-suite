@@ -142,36 +142,51 @@ function MessageNav({ sessions }: { sessions: ClientContext['sessions'] }): JSX.
   const pageRef = useRef<HTMLDivElement | null>(null)
 
   // —— 定位：测量 [data-conversation-scroll] 右缘 ——
+  // 拖拽帧直接写 rail 的 style.right（state 提交晚一帧，会拖出可见拖尾）。
+  const railRef = useRef<HTMLDivElement | null>(null)
   useEffect(() => {
     let raf = 0
+    let observed: Element | null = null
+    const schedule = (): void => {
+      if (raf !== 0) return
+      raf = window.requestAnimationFrame(measure)
+    }
+    const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(schedule) : null
+    const bindScrollport = (): Element | null => {
+      const next = document.querySelector('[data-conversation-scroll]')
+      if (next === observed) return next
+      ro?.disconnect()
+      observed = next
+      if (next !== null) ro?.observe(next)
+      return next
+    }
     const measure = (): void => {
       raf = 0
-      const sp = document.querySelector('[data-conversation-scroll]')
+      const sp = bindScrollport()
       if (sp === null) { setHasScrollport(false); return }
       setHasScrollport(true)
       const rect = sp.getBoundingClientRect()
       if (rect.width === 0 && rect.height === 0) return
       const next = Math.max(8, Math.round(window.innerWidth - rect.right + 12))
+      const rail = railRef.current
+      if (rail !== null) rail.style.right = `${next}px`
       setRightOffset((prev) => (Math.abs(prev - next) > 0.5 ? next : prev))
     }
-    const schedule = (): void => {
-      if (raf !== 0) return
-      raf = window.requestAnimationFrame(measure)
-    }
-    const sp = document.querySelector('[data-conversation-scroll]')
-    const ro = typeof ResizeObserver === 'function' && sp !== null ? new ResizeObserver(schedule) : null
-    if (ro !== null && sp !== null) ro.observe(sp)
-    // 编辑器开合（ide-layout 改 margin-left）会触发滚动区尺寸变化 → ResizeObserver 已覆盖；
-    // MutationObserver 兜底宿主重建滚动区节点的情况。
+    // 编辑器开合、侧栏拖动和聊天宽度拖动都由 layout 事件直接通知（同步测量，
+    // 直写 style 同帧落位）；MutationObserver 只作宿主替换滚动区节点的重绑兜底。
     const mo = typeof MutationObserver === 'function' ? new MutationObserver(schedule) : null
     if (mo !== null) mo.observe(document.body, { childList: true, subtree: true })
     window.addEventListener('resize', schedule)
+    // layout 已在本帧写完几何；同步测量并直写，不走 rAF/state 晚一帧。
+    const onLayoutApplied = (): void => measure()
+    window.addEventListener('dsh-ide-layout-applied', onLayoutApplied)
     measure()
     return () => {
       if (raf !== 0) cancelAnimationFrame(raf)
-      if (ro !== null) ro.disconnect()
-      if (mo !== null) mo.disconnect()
+      ro?.disconnect()
+      mo?.disconnect()
       window.removeEventListener('resize', schedule)
+      window.removeEventListener('dsh-ide-layout-applied', onLayoutApplied)
     }
   }, [])
 
@@ -202,17 +217,24 @@ function MessageNav({ sessions }: { sessions: ClientContext['sessions'] }): JSX.
     }
     updateActive()
     const el = document.querySelector('[data-conversation-scroll]')
-    let scrollTimer: number | null = null
+    // 滚动时用 rAF 合并重算：原 60ms setTimeout 仍会在连续滚动中反复触发全量
+    // 行高测量（getBoundingClientRect 强制重排）——改为每帧最多一次，并在无
+    // 滚动时完全不跑。
+    let scrollFrame = 0
     const onScroll = (): void => {
-      if (scrollTimer !== null) return
-      scrollTimer = window.setTimeout(() => { scrollTimer = null; updateActive() }, 60)
+      if (scrollFrame !== 0) return
+      scrollFrame = requestAnimationFrame(() => {
+        scrollFrame = 0
+        updateActive()
+      })
     }
     el?.addEventListener('scroll', onScroll, { passive: true })
-    const timer = window.setInterval(updateActive, 2000)
+    // 原为 setInterval(updateActive, 2000)：每 2 秒对全部消息行强制重排并可能
+    // setState，是滚动卡顿与闪屏的成因。改为事件驱动——只在会话内容变化
+    // （messages.length 变化，见依赖数组）与真实滚动时重算，静止时零开销。
     return () => {
-      if (scrollTimer !== null) clearTimeout(scrollTimer)
+      if (scrollFrame !== 0) cancelAnimationFrame(scrollFrame)
       el?.removeEventListener('scroll', onScroll)
-      clearInterval(timer)
     }
   }, [sessionId, messages.length])
 
@@ -261,6 +283,7 @@ function MessageNav({ sessions }: { sessions: ClientContext['sessions'] }): JSX.
   return createPortal(
     <div
       data-msg-nav-rail=""
+      ref={railRef}
       style={railStyle}
       role="navigation"
       aria-label="消息导航"
