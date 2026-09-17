@@ -46,6 +46,10 @@ DSH（DeepSeek Harness）Web GUI 的 IDE 布局插件：左侧工作区文件树
 - 30s 重连宽限
 - 右键菜单：复制选中 / 粘贴 / 清屏 / **🔄 重启终端**（立即杀当前 shell 并重连全新 shell，无需重启 DSH）
 
+### 交付卡片直达编辑区
+- agent 交付文件卡片的「在侧边栏打开/预览」改为直接跳进编辑区（window 捕获拦截 + aria-label 路径提取，中英文文案均支持）
+- root 外文件与 exe/zip 等二进制产物自动放行原生侧边栏预览
+
 ### Git 面板
 - status / diff / stage / unstage / commit / discard / log + 提交历史 diff
 - **嵌套仓库发现**：工作区根不是 Git 仓库时，自动扫描子目录中的仓库并在下拉框中选择（如多插件仓库 `dsh-plugins` 下的各插件）

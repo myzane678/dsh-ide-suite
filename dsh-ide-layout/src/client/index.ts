@@ -19,6 +19,7 @@ import { apiRead, subscribeChanges } from './api.ts'
 import { openFileInTabs } from './components/EditorPane.tsx'
 import { mountMessageNav } from './components/MessageNav.tsx'
 import { registerToolDiffRow } from './tool-diff-row.tsx'
+import { installDeliverableBridge } from './deliverable-bridge.ts'
 
 /** Required services: sessions + workspaces for the project root; slots 用于
  *  edit/write 工具行 shadow 注册（cordis 规矩：ctx 上访问未 inject 声明的服务
@@ -213,6 +214,19 @@ export function apply(ctx: ClientContext): void {
       disposers.push(...registerToolDiffRow(ctx))
     } catch (error) {
       console.error('[dsh-ide-layout] tool-diff-row register failed:', error)
+    }
+
+    // 交付卡片「在侧边栏打开/预览」改跳编辑区：window 捕获拦截，root 外或
+    // 二进制产物放行默认侧边栏预览。失败只降级，不影响 IDE 主布局。
+    try {
+      disposers.push(installDeliverableBridge({
+        getRoot: () => ide.getSnapshot().root,
+        openFile: (relPath: string) => {
+          void openFileInTabs(ide.getSnapshot().root, relPath, updateTabs)
+        },
+      }))
+    } catch (error) {
+      console.error('[dsh-ide-layout] deliverable-bridge install failed:', error)
     }
 
     return () => {

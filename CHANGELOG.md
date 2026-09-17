@@ -4,6 +4,24 @@ dsh-ide-suite（monorepo）版本与更新记录，跟随仓库 tag（v0.1.0 起
 
 v0.x 为 `dsh-ide-layout` 单包时代历史（全历史随 subtree 合入保留）；各子包完整明细见其各自 CHANGELOG：[layout](dsh-ide-layout/CHANGELOG.md) · [question-pin](dsh-question-pin/CHANGELOG.md) · [core](dsh-lsp-core/CHANGELOG.md) · [python](dsh-lsp-python/CHANGELOG.md) · [typescript](dsh-lsp-typescript/CHANGELOG.md) · [powershell](dsh-lsp-powershell/CHANGELOG.md) · [java](dsh-lsp-java/CHANGELOG.md)。
 
+## [1.9.0] - 2026-09-18
+
+交付卡片「在侧边栏打开/预览」改跳编辑区：点击拦截桥接。仅 `dsh-ide-layout` 升级（1.8.0 → 1.9.0），其余七包不变。**适用版本：DSH Desktop 2.0.9**（更早版本未验证）。
+
+### 新增
+
+- **交付卡片直达编辑区**（dsh-ide-layout）：主程序内置 deliverables 插件的交付文件卡片（「本轮文件改动」卡片），其「打开」主按钮与下拉菜单「在侧边栏预览」原为弹出右侧侧边栏预览 tab——现改为 **window 捕获阶段点击拦截**（手法与 dsh-drop-in 图片接管同款），从按钮 aria-label（中英文两套文案）提取文件绝对路径，换算到当前编辑区 root 相对路径后调 `openFileInTabs()` 直接打进编辑区。三条放行边界：文案提取不出路径 / 路径在编辑区 root 之外（跨工作区文件编辑区打不开）/ exe·zip 等二进制产物（编辑区只会得到乱码文本 tab）——三者保留原生侧边栏预览行为。桥接模块 `deliverable-bridge.ts` 纯函数可测，挂载走 try/catch 降级 + disposers 注销，失败不影响 IDE 主布局。
+
+### 测试
+
+- 新增 `tests/deliverable-bridge.test.ts` 13 例：路径提取（中文「在侧边栏打开/预览」、英文 Open/Preview in sidebar、含空格路径、普通按钮不拦截）、root 相对化（绝对剥前缀、大小写不敏感、root 外返回 null、空 root）、二进制产物判定。全仓 185 例通过（layout 140 + core 26 + python 9 + ts 4 + java 3 + rust 3）。
+
+### 版本
+
+dsh-ide-layout 1.8.0 → 1.9.0；dsh-question-pin / dsh-lsp-core / python / typescript / powershell / java / rust 不变。
+
+> dsh-lsp-powershell 的 vendor tgz 资产无变化，仍使用 v1.0.0 提供的 dsh-lsp-powershell-1.0.0.tgz。
+
 ## [1.8.0] - 2026-09-12
 
 DSH Desktop 2.0.9 适配 + 实时性专项：固定浮层同帧跟随、侧栏拖拽帧接管、长列表逐帧重排治理、事件链去轮询。`dsh-ide-layout` 升级（1.7.2 → 1.8.0），`dsh-question-pin` 升级（0.1.1 → 0.2.0），其余七包不变。
