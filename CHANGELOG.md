@@ -4,6 +4,26 @@ dsh-ide-suite（monorepo）版本与更新记录，跟随仓库 tag（v0.1.0 起
 
 v0.x 为 `dsh-ide-layout` 单包时代历史（全历史随 subtree 合入保留）；各子包完整明细见其各自 CHANGELOG：[layout](dsh-ide-layout/CHANGELOG.md) · [question-pin](dsh-question-pin/CHANGELOG.md) · [core](dsh-lsp-core/CHANGELOG.md) · [python](dsh-lsp-python/CHANGELOG.md) · [typescript](dsh-lsp-typescript/CHANGELOG.md) · [powershell](dsh-lsp-powershell/CHANGELOG.md) · [java](dsh-lsp-java/CHANGELOG.md)。
 
+## [1.9.1] - 2026-09-18
+
+修复：edit/write 工具行 diff 在 DSH Desktop 2.0.9 下完成态退化为 call_id（v1.7.0 功能回归）。仅 `dsh-ide-layout` 升级（1.9.0 → 1.9.1），其余七包不变。**适用版本：DSH Desktop 2.0.9**（更早版本未验证）。
+
+### 修复
+
+- **完成态工具行文件名/diff 全丢**（dsh-ide-layout）：2.0.9 改了完成态工具块 wire 形状——argsRaw 从 block 顶层挪进 `block.call.argsRaw`、diff 视图从 callView/resultView(`card:'diff'`) 改为 `block.meta.diffs` + 即时计算；插件仍按旧形状解析，完成态 `displayPathOf`/`diffHunksOf` 双双失败回退 call_id 兜底且无红绿 diff（流式进行中不受影响，故 v1.7.0 当时实测正常）。适配：新增 `argsRawOf()` 统一参数读取（完成态优先 `call.argsRaw`、顶层兜底）；完成态优先读 `block.meta.diffs`（宿主 appliedDiffs 同源），旧视图保留为兼容兜底；args 重建兜底补 Code Mode `file_path`/`content` 字段。
+- **出错行语义对齐宿主**：`isError` 完成态不再用意图参数假装渲染 diff（编辑失败无已应用变更），只显示「文件名 + 报错行」——文件名照常从 `call.argsRaw` 提取。
+- **diff 行首去 +/- 前缀**（都督需求）：行号列 + 红绿底色已足够，删掉 `::before` 的 `+ `/`- ` 前缀符号；行级浅底 × 词级深块双层高亮机制不变。
+
+### 测试
+
+- 新增 4 例 2.0.9 形状用例（嵌套 argsRaw 重建 / meta.diffs 优先 / 出错行路径提取 / argsRawOf 口径）。全仓 189 例通过（layout 144 + core 26 + python 9 + ts 4 + java 3 + rust 3）。
+
+### 版本
+
+dsh-ide-layout 1.9.0 → 1.9.1；dsh-question-pin / dsh-lsp-core / python / typescript / powershell / java / rust 不变。
+
+> dsh-lsp-powershell 的 vendor tgz 资产无变化，仍使用 v1.0.0 提供的 dsh-lsp-powershell-1.0.0.tgz。
+
 ## [1.9.0] - 2026-09-18
 
 交付卡片「在侧边栏打开/预览」改跳编辑区：点击拦截桥接。仅 `dsh-ide-layout` 升级（1.8.0 → 1.9.0），其余七包不变。**适用版本：DSH Desktop 2.0.9**（更早版本未验证）。

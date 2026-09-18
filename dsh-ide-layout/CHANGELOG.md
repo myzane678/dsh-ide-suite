@@ -2,6 +2,20 @@
 
 本项目版本与更新记录。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [1.9.1] - 2026-09-18
+
+修复：edit/write 工具行 diff 在 DSH Desktop 2.0.9 下完成态退化为 call_id（v1.7.0 功能回归）。**适用版本：DSH Desktop 2.0.9**（更早版本未验证）。
+
+### 修复
+
+- **完成态工具行文件名/diff 全丢**：2.0.9 改了完成态工具块 wire 形状——argsRaw 从 block 顶层挪进 `block.call.argsRaw`、diff 视图从 callView/resultView(`card:'diff'`) 改为 `block.meta.diffs` + 即时计算；插件仍按旧形状解析，完成态 `displayPathOf`/`diffHunksOf` 双双失败回退 call_id 兜底且无红绿 diff（流式进行中不受影响，故 v1.7.0 当时实测正常）。适配：新增 `argsRawOf()` 统一参数读取；完成态优先读 `block.meta.diffs`（宿主 appliedDiffs 同源），旧视图保留为兼容兜底；args 重建兜底补 Code Mode `file_path`/`content` 字段。
+- **出错行语义对齐宿主**：`isError` 完成态不再用意图参数假装渲染 diff，只显示「文件名 + 报错行」。
+- **diff 行首去 +/- 前缀**（都督需求）：删掉 `::before` 的 `+ `/`- ` 符号，行号列 + 红绿底色保留；行级浅底 × 词级深块双层高亮机制不变。
+
+### 测试
+
+- 新增 4 例 2.0.9 形状用例。本包 144 例全通过。
+
 ## [1.9.0] - 2026-09-18
 
 交付卡片「在侧边栏打开/预览」改跳编辑区：点击拦截桥接。**适用版本：DSH Desktop 2.0.9**（更早版本未验证）。

@@ -357,8 +357,6 @@ function injectDiffStatStyle(): void {
     '.ide-diffrows-ctx{color:var(--dsw-alias-label-primary, #1a1a1a);}',
     '.ide-diffrows-del{color:var(--dsw-alias-state-error-primary, #cf222e);background:color-mix(in srgb, var(--dsw-alias-state-error-primary, #cf222e) 10%, transparent);}',
     '.ide-diffrows-add{color:var(--dsw-alias-state-success-primary, #1a7f37);background:color-mix(in srgb, var(--dsw-alias-state-success-primary, #1a7f37) 10%, transparent);}',
-    '.ide-diffrows-del::before{content:"- ";}',
-    '.ide-diffrows-add::before{content:"+ ";}',
     '.ide-diffrows-word{border-radius:3px;background:color-mix(in srgb, currentColor 25%, transparent);}',
     '.ide-diffrows-expand{display:block;width:100%;padding:0;border:0;background:transparent;color:var(--dsw-alias-label-tertiary, #b0b4bc);cursor:pointer;font:inherit;text-align:left;}',
     '.ide-diffrows-expand:hover{color:var(--dsw-alias-label-secondary, #8a8f98);}',

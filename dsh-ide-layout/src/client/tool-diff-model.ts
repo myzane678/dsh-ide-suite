@@ -18,17 +18,32 @@ export interface DiffHunk {
 }
 
 /** 运行中 / 完成两种工具 block 的最小形状（只声明本模块用到的字段；
- *  wire 上视图字段可能显式为 null，故带 | null）。 */
+ *  wire 上视图字段可能显式为 null，故带 | null）。
+ *  2.0.9 适配：完成态 argsRaw 挪进 block.call.argsRaw、已应用 diff 挪到
+ *  block.meta.diffs（旧顶层字段保留读取，向后兼容）。 */
 export interface ToolBlockLike {
   /** 完成态标记：settled block 携带 kind（宿主 toolRowModel 的 done 判定）。 */
   kind?: string
   callId?: string
   argsRaw?: string
+  /** 2.0.9 完成态：参数原文嵌套在 call 里（宿主 toolRowModel：done ? block.call?.argsRaw : block.argsRaw）。 */
+  call?: { argsRaw?: string } | null
+  /** 2.0.9 完成态：已应用变更列表（宿主 appliedDiffs 读 meta.diffs）。 */
+  meta?: { diffs?: unknown } | null
   callView?: { card?: string; kind?: string; diffs?: unknown } | null
   resultView?: { card?: string; kind?: string; diffs?: unknown } | null
   error?: { code?: string }
   isError?: boolean
   content?: Array<{ type?: string; text?: string }>
+}
+
+/** 参数原文统一读取：完成态优先 block.call.argsRaw（2.0.9），顶层 argsRaw
+ *  兜底（旧版本 + 运行中流式累加都在顶层）。 */
+export function argsRawOf(block: ToolBlockLike): string {
+  if (block.kind !== undefined) {
+    return (block.call?.argsRaw ?? block.argsRaw ?? '')
+  }
+  return block.argsRaw ?? ''
 }
 
 /** 行运行状态（对齐宿主 toolRowModel 的 state 派生）。 */
@@ -59,33 +74,58 @@ export function narrowDiffs(diffs: unknown): DiffHunk[] | null {
   return out
 }
 
-/** 从 block 提取 diff hunks：完成态先 resultView 再 callView（str_replace_editor
- *  无 presentResult，完成态 resultView 可能不带 diff 卡，callView 兜底）；
- *  仍无卡时从 argsRaw 重建 hunk（insert 命令的视图是 generic 无 diffs、以及
- *  完成态视图丢失的场景）：oldText=old_str、newText=new_str/file_text。
- *  view 字段可能为 null（wire 显式序列化，如 edit 工具完成态 resultView:null），
- *  必须用 truthy 判空——只查 !== undefined 会在这里炸掉整行（abdicate）。
- *  view 命令（读文件）无 old_str/new_str/file_text → 自然返回 null。 */
+/** 从 block 提取 diff hunks：
+ *  1. 运行中（无 kind）：读 callView 的 `card:'diff'` 视图（旧形状，仍有效）；
+ *  2. 完成态（2.0.9）：读 block.meta.diffs（宿主 appliedDiffs 同源；isError
+ *     时编辑本就没应用成功，返回 null 只显示报错行，对齐宿主语义）；
+ *  3. 仍无卡时从 argsRaw 重建 hunk（insert 命令的视图无 diffs、str_replace_editor
+ *     完成态 2.0.9 走 generic 无视图、以及完成态视图丢失的场景）：oldText=old_str、
+ *     newText=new_str/file_text；Code Mode 的 edit/write 用 file_path/content，
+ *     一并补上。
+ *  view 字段可能为 null（wire 显式序列化），必须用 truthy 判空——只查
+ *  !== undefined 会在这里炸掉整行（abdicate）。 */
 export function diffHunksOf(block: ToolBlockLike): DiffHunk[] | null {
-  const views = block.kind !== undefined ? [block.resultView, block.callView] : [block.callView]
-  for (const view of views) {
-    if (view != null && view.card === 'diff') {
-      const hunks = narrowDiffs(view.diffs)
+  if (block.kind === undefined) {
+    if (block.callView != null && block.callView.card === 'diff') {
+      const hunks = narrowDiffs(block.callView.diffs)
       if (hunks !== null) return hunks
+    }
+  } else {
+    // 完成态：出错即无已应用 diff（宿主 diffCardModel 同语义），args 重建也
+    // 一并跳过——错误行只显示「文件名 + 报错」，不拿意图参数假装变更内容。
+    if (block.isError === true) return null
+    if (block.meta != null) {
+      const applied = narrowDiffs(block.meta.diffs)
+      if (applied !== null) return applied
+    }
+    // 旧 wire 兜底（2.0.9 前）：resultView → callView 的 card:'diff' 视图。
+    for (const view of [block.resultView, block.callView]) {
+      if (view != null && view.card === 'diff') {
+        const hunks = narrowDiffs(view.diffs)
+        if (hunks !== null) return hunks
+      }
     }
   }
   const args = parseArgs(block)
   if (args === null) return null
-  const newText = typeof args.new_str === 'string' ? args.new_str : typeof args.file_text === 'string' ? args.file_text : null
-  if (typeof args.path !== 'string' || args.path === '' || (newText === null && typeof args.old_str !== 'string')) return null
-  return [{ path: args.path, oldText: typeof args.old_str === 'string' ? args.old_str : null, newText: newText ?? '' }]
+  const path = typeof args.path === 'string' ? args.path : typeof args.file_path === 'string' ? args.file_path : null
+  const newText = typeof args.new_str === 'string'
+    ? args.new_str
+    : typeof args.file_text === 'string'
+      ? args.file_text
+      : typeof args.content === 'string'
+        ? args.content
+        : null
+  if (typeof path !== 'string' || path === '' || (newText === null && typeof args.old_str !== 'string')) return null
+  return [{ path, oldText: typeof args.old_str === 'string' ? args.old_str : null, newText: newText ?? '' }]
 }
 
-/** 解析 argsRaw JSON；未到齐/非完整 JSON → null。 */
+/** 解析参数原文 JSON；未到齐/非完整 JSON → null。 */
 function parseArgs(block: ToolBlockLike): Record<string, unknown> | null {
-  if (typeof block.argsRaw !== 'string' || block.argsRaw === '') return null
+  const raw = argsRawOf(block)
+  if (typeof raw !== 'string' || raw === '') return null
   try {
-    const args = JSON.parse(block.argsRaw) as unknown
+    const args = JSON.parse(raw) as unknown
     return typeof args === 'object' && args !== null ? (args as Record<string, unknown>) : null
   } catch {
     return null
@@ -353,12 +393,13 @@ export function describePath(path: string, cwd?: string, home?: string): FileLab
   return { name: cut === -1 ? p : p.slice(cut + 1), dir: cut === -1 ? '' : p.slice(0, cut + 1) }
 }
 
-/** 展示路径：优先 diff 视图的 path，兜底从 argsRaw JSON 取 path，再兜底 callId。 */
+/** 展示路径：优先 diff 视图的 path，兜底从参数 JSON 取 path/file_path，再兜底 callId。 */
 export function displayPathOf(block: ToolBlockLike, hunks: readonly DiffHunk[] | null): string {
   if (hunks !== null) return hunks[0].path
   try {
-    const args = JSON.parse(block.argsRaw ?? '') as Record<string, unknown>
-    if (typeof args.path === 'string' && args.path !== '') return args.path
+    const args = JSON.parse(argsRawOf(block) || '') as Record<string, unknown>
+    const path = typeof args.path === 'string' && args.path !== '' ? args.path : typeof args.file_path === 'string' ? args.file_path : null
+    if (typeof path === 'string' && path !== '') return path
   } catch {
     // 参数未到齐 / 非完整 JSON（流式中间态）→ 走 callId 兜底。
   }

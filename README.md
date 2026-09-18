@@ -1,13 +1,13 @@
 # dsh-ide-suite
 
 [![CI](https://github.com/myzane678/dsh-ide-suite/actions/workflows/ci.yml/badge.svg)](https://github.com/myzane678/dsh-ide-suite/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-1.9.0-blue)](https://github.com/myzane678/dsh-ide-suite/releases)
+[![Version](https://img.shields.io/badge/version-1.9.1-blue)](https://github.com/myzane678/dsh-ide-suite/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D22-green)](https://nodejs.org)
 [![pnpm](https://img.shields.io/badge/pnpm-%3E%3D11-orange)](https://pnpm.io)
-[![Tests](https://img.shields.io/badge/tests-185%20passed-brightgreen)](#开发)
+[![Tests](https://img.shields.io/badge/tests-189%20passed-brightgreen)](#开发)
 
-DSH（DeepSeek Harness）Web GUI 的 IDE 插件套件（monorepo，pnpm workspace）：**编辑器外壳 + 会话置顶条 + LSP 基础设施 + 六语言插件**。v1.9.0——交付卡片「在侧边栏预览」改跳编辑区（点击拦截桥接）。新增一种语言的 LSP 支持 = 新增一个插件，编辑器零改动。
+DSH（DeepSeek Harness）Web GUI 的 IDE 插件套件（monorepo，pnpm workspace）：**编辑器外壳 + 会话置顶条 + LSP 基础设施 + 六语言插件**。v1.9.1——工具行 diff 适配 2.0.9 wire 形状（完成态文件名 + 红绿 diff 恢复）。新增一种语言的 LSP 支持 = 新增一个插件，编辑器零改动。
 
 ## 功能特性
 
@@ -64,12 +64,12 @@ DSH（DeepSeek Harness）Web GUI 的 IDE 插件套件（monorepo，pnpm workspac
 // ~/.dsh/profiles/<profile>/package.json
 {
   "dependencies": {
-    "dsh-ide-layout": "github:myzane678/dsh-ide-suite#v1.9.0",
-    "dsh-lsp-core": "github:myzane678/dsh-ide-suite#v1.9.0",
-    "dsh-lsp-python": "github:myzane678/dsh-ide-suite#v1.9.0",
-    "dsh-lsp-typescript": "github:myzane678/dsh-ide-suite#v1.9.0",
-    "dsh-lsp-java": "github:myzane678/dsh-ide-suite#v1.9.0",
-    "dsh-lsp-rust": "github:myzane678/dsh-ide-suite#v1.9.0",
+    "dsh-ide-layout": "github:myzane678/dsh-ide-suite#v1.9.1",
+    "dsh-lsp-core": "github:myzane678/dsh-ide-suite#v1.9.1",
+    "dsh-lsp-python": "github:myzane678/dsh-ide-suite#v1.9.1",
+    "dsh-lsp-typescript": "github:myzane678/dsh-ide-suite#v1.9.1",
+    "dsh-lsp-java": "github:myzane678/dsh-ide-suite#v1.9.1",
+    "dsh-lsp-rust": "github:myzane678/dsh-ide-suite#v1.9.1",
     // PowerShell 插件用 Release 的 tgz 资产（vendor 不在 git 内）：
     "dsh-lsp-powershell": "https://github.com/myzane678/dsh-ide-suite/releases/download/v1.0.0/dsh-lsp-powershell-1.0.0.tgz"
   },
@@ -127,7 +127,7 @@ LSP 拆分工程的设计与分阶段记录：[docs/lsp-split-design.md](docs/ls
 
 ## 更新日志
 
-见 [CHANGELOG.md](CHANGELOG.md)——v0.1.0 → v1.9.0 逐版记录（v0.x 为 `dsh-ide-layout` 并入前历史）。各子包明细见其各自 CHANGELOG。
+见 [CHANGELOG.md](CHANGELOG.md)——v0.1.0 → v1.9.1 逐版记录（v0.x 为 `dsh-ide-layout` 并入前历史）。各子包明细见其各自 CHANGELOG。
 
 ## 跨插件协作约定（贡献必读）
 

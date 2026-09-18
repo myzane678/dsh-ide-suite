@@ -5,6 +5,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   alignDiff,
+  argsRawOf,
   buildDiffRows,
   describePath,
   diffHunksOf,
@@ -78,6 +79,44 @@ describe('diffHunksOf 提取', () => {
   it('view 命令（读文件）无 old_str/new_str/file_text → null', () => {
     expect(diffHunksOf({ callId: 'c', argsRaw: '{"command":"view","path":"d.md"}' })).toBeNull()
     expect(diffHunksOf({ callId: 'c', argsRaw: '{"comma' })).toBeNull()
+  })
+
+  it('2.0.9 完成态：argsRaw 嵌套在 block.call.argsRaw，顶层无 argsRaw 也能重建 hunk', () => {
+    expect(diffHunksOf({ kind: 'r', call: { argsRaw: '{"command":"str_replace","path":"c.ts","old_str":"old","new_str":"new"}' } }))
+      .toEqual([{ path: 'c.ts', oldText: 'old', newText: 'new' }])
+    // Code Mode edit：file_path/content 字段同样识别
+    expect(diffHunksOf({ kind: 'r', call: { argsRaw: '{"file_path":"d.go","old_str":"a","content":"b"}' } }))
+      .toEqual([{ path: 'd.go', oldText: 'a', newText: 'b' }])
+    expect(diffHunksOf({ kind: 'r', call: { argsRaw: '{"file_path":"e.md","content":"# hi\\n"}' } }))
+      .toEqual([{ path: 'e.md', oldText: null, newText: '# hi\n' }])
+  })
+
+  it('2.0.9 完成态：优先 block.meta.diffs（宿主 appliedDiffs 同源）', () => {
+    const applied = [{ path: 'meta.md', oldText: 'x', newText: 'y' }]
+    expect(diffHunksOf({
+      kind: 'r',
+      call: { argsRaw: '{"file_path":"args.md","content":"z"}' },
+      meta: { diffs: applied },
+    })).toEqual(applied)
+  })
+
+  it('2.0.9 完成态出错行（isError）：不渲染 diff，只走报错行——路径仍可从 call.argsRaw 提取', () => {
+    const block: ToolBlockLike = {
+      kind: 'r',
+      isError: true,
+      call: { argsRaw: '{"command":"str_replace","path":"broken.ts","old_str":"a","new_str":"b"}' },
+      meta: { diffs: [{ path: 'broken.ts', oldText: 'a', newText: 'b' }] },
+      content: [{ type: 'text', text: 'Error: cannot modify' }],
+    }
+    expect(diffHunksOf(block)).toBeNull()
+    expect(displayPathOf(block, null)).toBe('broken.ts')
+  })
+
+  it('argsRawOf：完成态优先 call.argsRaw，顶层兜底；运行中读顶层', () => {
+    expect(argsRawOf({ kind: 'r', call: { argsRaw: '{"a":1}' } })).toBe('{"a":1}')
+    expect(argsRawOf({ kind: 'r', call: null, argsRaw: '{"b":2}' })).toBe('{"b":2}')
+    expect(argsRawOf({ argsRaw: '{"c":3}' })).toBe('{"c":3}')
+    expect(argsRawOf({ kind: 'r' })).toBe('')
   })
 
   it('无 diff 卡 / 卡畸形 → null（args 也无来源时）', () => {
