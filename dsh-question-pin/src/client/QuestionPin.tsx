@@ -51,37 +51,40 @@ function topTrimBottom(): number {
 }
 
 /**
- * 宿主设置面板是否打开：设置触发按钮（sidebar.settings slot）的 aria-expanded
- * （与皮肤/ide-layout 检测设置开合的信号一致）。设置模态 z-1000 原地渲染在侧栏
- * DOM 子树内（受限层叠上下文，非 body portal），压不过 body 层 z-12 的本置顶条
- * ——设置打开期间组件不渲染让位（ide-layout v1.5.1 编辑器让位同款方案）。
- * 宿主重建触发按钮后由 rebinder 重新绑定。
- * 2.0.9 适配：触发按钮外多包了一层 triggerRow div（`BUTTON.MI-_Aa_trigger` 不再
- * 是 slot 的直接子代），rebinder 原 `>` 直接子代选择器永久失配 → observer 从未
- * 绑定 → 设置打开时胶囊不隐藏、压在设置模态上（CDP 实测 directChildHit:false）。
- * 改为后代选择器（与 probe 同款），按钮节点变更时换绑。
+ * 有弹出菜单打开（本置顶条需要让位）：
+ * ① 宿主设置面板打开——sidebar.settings slot 触发按钮的 aria-expanded
+ *   （与皮肤/ide-layout 检测设置开合的信号一致）。设置模态 z-1000 原地渲染在
+ *   侧栏 DOM 子树内（受限层叠上下文，非 body portal），压不过 body 层 z-9 的
+ *   本置顶条——设置打开期间组件不渲染让位（ide-layout v1.5.1 编辑器让位同款）。
+ * ② 任意菜单型下拉打开——aria-haspopup='menu' 且 aria-expanded='true' 的触发
+ *   按钮（open-in-app 的 VS Code/PyCharm/Git Bash 下拉等）。这些下拉走官方
+ *   Menu 就地渲染（.list z100→皮肤已抬 1400），但黑条 portal 到 body 且 z9
+ *   参与根层叠，实测仍盖在部分下拉之上（祖先链存在未定位的层叠上下文封顶
+ *   下拉的对外层级）。与其再赌一次 z 比拼（v1 抬官方容器、v3 z4/z12 来回
+ *   踩坑），不如复用设置让位模式：任何菜单打开期间黑条不渲染，关闭即回。
+ * 统一用全局属性查询 + document 级 MutationObserver：aria-expanded 突变会
+ * 冒泡到 attributes 记录，直接对 body 开 subtree 观察即可，无需对单个触发
+ * 按钮换绑（官方会重建按钮节点，逐节点 observe 会漏）。
  */
-function useSettingsOpen(): boolean {
+function useMenuOpen(): boolean {
   const [open, setOpen] = useState(false)
   useEffect(() => {
     const probe = (): void => {
-      setOpen(document.querySelector("[data-slot='sidebar.settings'] [aria-expanded='true']") !== null)
+      setOpen(
+        document.querySelector("[data-slot='sidebar.settings'] [aria-expanded='true']") !== null
+          || document.querySelector("[aria-haspopup='menu'][aria-expanded='true']") !== null,
+      )
     }
-    let observed: Element | null = null
+    // attributes 突变（aria-expanded 切换）+ childList（按钮重建）都要触发探测。
     const observer = new MutationObserver(probe)
-    const rebinder = new MutationObserver(() => {
-      const trigger = document.querySelector("[data-slot='sidebar.settings'] :is(button, [role='button'])")
-      if (trigger !== null && trigger !== observed) {
-        observed = trigger
-        observer.observe(trigger, { attributes: true, attributeFilter: ['aria-expanded'] })
-      }
+    observer.observe(document.body, {
+      attributes: true,
+      attributeFilter: ['aria-expanded', 'aria-haspopup'],
+      childList: true,
+      subtree: true,
     })
-    rebinder.observe(document.body, { childList: true, subtree: true })
     probe()
-    return () => {
-      observer.disconnect()
-      rebinder.disconnect()
-    }
+    return () => observer.disconnect()
   }, [])
   return open
 }
@@ -100,8 +103,8 @@ function QuestionPin(): JSX.Element | null {
   const rafRef = useRef(0)
   // 拖拽帧的定位直接写按钮 style（React state 提交晚一帧，会拖出可见拖尾）。
   const btnRef = useRef<HTMLButtonElement | null>(null)
-  // 设置面板打开 → 不渲染（见 useSettingsOpen 注释）
-  const settingsOpen = useSettingsOpen()
+  // 有弹出菜单打开（设置面板/任意下拉）→ 不渲染让位（见 useMenuOpen 注释）
+  const menuOpen = useMenuOpen()
 
   // 几何计算 + 同帧直写（state 提交晚一帧，拖拽帧必须现在就位）。
   // scan 与拖拽帧的轻量跟随共用这一段。
@@ -238,7 +241,7 @@ function QuestionPin(): JSX.Element | null {
     }
   }, [])
 
-  if (pin === null || settingsOpen) return null
+  if (pin === null || menuOpen) return null
   return createPortal(
     <button
       type="button"
@@ -257,7 +260,7 @@ function QuestionPin(): JSX.Element | null {
         el.style.background = 'rgba(20,20,20,0.88)'
       }}
       style={{
-        position: 'fixed', left: pin.left, top: pin.top, width: pin.width, zIndex: 12,
+        position: 'fixed', left: pin.left, top: pin.top, width: pin.width, zIndex: 9,
         display: 'flex', alignItems: 'center', gap: 8, padding: '7px 14px',
         border: '1px solid rgba(127,127,127,0.3)', borderRadius: 10,
         background: 'rgba(20,20,20,0.88)', color: '#e5e7eb',

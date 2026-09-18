@@ -4,6 +4,23 @@ dsh-ide-suite（monorepo）版本与更新记录，跟随仓库 tag（v0.1.0 起
 
 v0.x 为 `dsh-ide-layout` 单包时代历史（全历史随 subtree 合入保留）；各子包完整明细见其各自 CHANGELOG：[layout](dsh-ide-layout/CHANGELOG.md) · [question-pin](dsh-question-pin/CHANGELOG.md) · [core](dsh-lsp-core/CHANGELOG.md) · [python](dsh-lsp-python/CHANGELOG.md) · [typescript](dsh-lsp-typescript/CHANGELOG.md) · [powershell](dsh-lsp-powershell/CHANGELOG.md) · [java](dsh-lsp-java/CHANGELOG.md)。
 
+## [1.10.0] - 2026-09-18
+
+菜单让位：置顶条在任意下拉菜单打开期间自动隐藏。仅 `dsh-question-pin` 升级（0.2.0 → 0.3.0），其余七包不变。**适用版本：DSH Desktop 2.0.9**（更早版本未验证）。
+
+### 新增
+
+- **菜单让位**（dsh-question-pin）：让位条件从「设置面板打开」扩展为「任意 `aria-haspopup='menu'` 且 `aria-expanded='true'`」——open-in-app 的文件资源管理器/VS Code/PyCharm/Git Bash 下拉打开期间置顶条不渲染，关闭即恢复。observer 改为 body 级属性观察（`aria-expanded`/`aria-haspopup`），官方重建按钮节点不漏检。
+- **置顶条 zIndex 12 → 9**：按官方层级梯子（右面板 10 > 内容层 ≤8）取唯一可行档位——始终悬浮于消息流上方，面板打开时被面板优先覆盖。
+
+### 修复
+
+- **下拉列表被置顶条压住**：open-in-app 下拉走官方 Menu 就地渲染（编译类名 `_list_1nxmc_`，z100，非 portal），祖先链层叠上下文封顶对外层级，置顶条（body portal）实测盖在其上。两轮 z 比拼踩坑（抬官方容器→置顶条被会话区盖；z4→被内容盖）后改让位模式根治。配合 dsh-client-ui-skin-maid-atelier v0.0.5 的弹层抬层双保险。
+
+### 版本
+
+dsh-question-pin 0.2.0 → 0.3.0；dsh-ide-layout / dsh-lsp-core / python / typescript / powershell / java / rust 不变。
+
 ## [1.9.1] - 2026-09-18
 
 修复：edit/write 工具行 diff 在 DSH Desktop 2.0.9 下完成态退化为 call_id（v1.7.0 功能回归）。仅 `dsh-ide-layout` 升级（1.9.0 → 1.9.1），其余七包不变。**适用版本：DSH Desktop 2.0.9**（更早版本未验证）。
