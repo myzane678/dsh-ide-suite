@@ -346,7 +346,9 @@ function injectDiffStatStyle(): void {
     // 行底色用 color-mix 淡化叠加——不支持时退化为纯彩字，渐进增强）。
     '.ide-diffrows{position:relative;margin:2px 0;color:var(--dsw-alias-label-primary, #1a1a1a);background:var(--dsw-alias-markdown-code-block, #f6f8fa);border-radius:12px;overflow:hidden;}',
     '.ide-diffrows-copy{position:absolute;top:8px;right:12px;z-index:1;background:transparent;border:0;padding:0;color:var(--dsw-alias-label-secondary, #8a8f98);cursor:pointer;font:inherit;font-size:12px;}',
-    '.ide-diffrows-body{padding:10px 12px;font-family:var(--ds-font-family-code, ui-monospace, monospace);font-size:12px;line-height:22px;}',
+    // 字号消费官方 token（与 markdown 围栏代码块同源，主题/字号插件缩放时自动跟随）；
+    // 官方 token 缺失时回退旧写死值。
+    '.ide-diffrows-body{padding:10px 12px;font:var(--dsw-font-markdown-code-block, 12px/22px var(--ds-font-family-code, ui-monospace, monospace));}',
     // 行内容随 agent 区宽度自然折行（对话区文本式）：pre-wrap 保缩进、
     // anywhere 兜底超长 token；底色铺满整行宽（flex:1 撑满，不再横向滚动）。
     '.ide-diffrows-line{display:flex;align-items:flex-start;min-height:22px;white-space:pre-wrap;overflow-wrap:anywhere;}',

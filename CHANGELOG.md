@@ -4,6 +4,14 @@ dsh-ide-suite（monorepo）版本与更新记录，跟随仓库 tag（v0.1.0 起
 
 v0.x 为 `dsh-ide-layout` 单包时代历史（全历史随 subtree 合入保留）；各子包完整明细见其各自 CHANGELOG：[layout](dsh-ide-layout/CHANGELOG.md) · [question-pin](dsh-question-pin/CHANGELOG.md) · [core](dsh-lsp-core/CHANGELOG.md) · [python](dsh-lsp-python/CHANGELOG.md) · [typescript](dsh-lsp-typescript/CHANGELOG.md) · [powershell](dsh-lsp-powershell/CHANGELOG.md) · [java](dsh-lsp-java/CHANGELOG.md)。
 
+## [1.10.2] - 2026-09-19
+
+改进：工具卡 diff 行字号接入官方 token 体系。仅 `dsh-ide-layout` 升级（1.9.2 → 1.9.3），其余七包不变。**适用版本：DSH Desktop 2.0.9**（更早版本未验证）。
+
+### 变更
+
+- **工具卡 diff 行字号消费官方 token**（dsh-ide-layout）：`tool-diff-row.tsx` 的 `.ide-diffrows-body` 由写死 `12px/22px` 改为 `font: var(--dsw-font-markdown-code-block, 12px/22px …)`，与 markdown 围栏代码块同源 token。配合 dsh-code-font-size 类字号插件：代码字号步进现在**同时缩放聊天代码块与工具卡 diff 行**，插件无需再定向覆盖 `ide-diffrows` 类名；token 缺失时回退旧值。默认观感从 12px/22px 变为官方 token 的 11px/19px（装字号插件时随其设定）。
+
 ## [1.10.1] - 2026-09-19
 
 修复：会话区向上快速滑动的回弹抖动治本。仅 `dsh-ide-layout` 升级（1.9.1 → 1.9.2），其余七包不变。**适用版本：DSH Desktop 2.0.9**（更早版本未验证）。

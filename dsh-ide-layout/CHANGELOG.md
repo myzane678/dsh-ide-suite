@@ -2,6 +2,14 @@
 
 本项目版本与更新记录。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [1.9.3] - 2026-09-19
+
+改进：工具卡 diff 行字号接入官方 token 体系。**适用版本：DSH Desktop 2.0.9**（更早版本未验证）。
+
+### 变更
+
+- **diff 行字号消费官方 token**：`tool-diff-row.tsx` 的 `.ide-diffrows-body` 由写死 `font-size:12px;line-height:22px` 改为 `font:var(--dsw-font-markdown-code-block, 12px/22px var(--ds-font-family-code, ui-monospace, monospace))`——与 markdown 围栏代码块同源 token，官方主题或字号类插件（如 dsh-code-font-size）缩放该 token 时 diff 行自动跟随，外部插件无需再定向覆盖 `ide-diffrows` 类名；token 缺失时回退原 12px/22px。默认观感从 12px/22px 变为官方 token 的 11px/19px。
+
 ## [1.9.2] - 2026-09-19
 
 修复：会话区向上快速滑动的回弹抖动治本（v1.8.0 长会话重排治理的滚动副作用）。**适用版本：DSH Desktop 2.0.9**（更早版本未验证）。

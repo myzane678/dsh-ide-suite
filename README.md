@@ -1,7 +1,7 @@
 # dsh-ide-suite
 
 [![CI](https://github.com/myzane678/dsh-ide-suite/actions/workflows/ci.yml/badge.svg)](https://github.com/myzane678/dsh-ide-suite/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-1.10.1-blue)](https://github.com/myzane678/dsh-ide-suite/releases)
+[![Version](https://img.shields.io/badge/version-1.10.2-blue)](https://github.com/myzane678/dsh-ide-suite/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D22-green)](https://nodejs.org)
 [![pnpm](https://img.shields.io/badge/pnpm-%3E%3D11-orange)](https://pnpm.io)
@@ -127,7 +127,7 @@ LSP 拆分工程的设计与分阶段记录：[docs/lsp-split-design.md](docs/ls
 
 ## 更新日志
 
-见 [CHANGELOG.md](CHANGELOG.md)——v0.1.0 → v1.10.1 逐版记录（v0.x 为 `dsh-ide-layout` 并入前历史）。各子包明细见其各自 CHANGELOG。
+见 [CHANGELOG.md](CHANGELOG.md)——v0.1.0 → v1.10.2 逐版记录（v0.x 为 `dsh-ide-layout` 并入前历史）。各子包明细见其各自 CHANGELOG。
 
 ## 跨插件协作约定（贡献必读）
 
