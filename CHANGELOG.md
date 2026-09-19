@@ -4,6 +4,17 @@ dsh-ide-suite（monorepo）版本与更新记录，跟随仓库 tag（v0.1.0 起
 
 v0.x 为 `dsh-ide-layout` 单包时代历史（全历史随 subtree 合入保留）；各子包完整明细见其各自 CHANGELOG：[layout](dsh-ide-layout/CHANGELOG.md) · [question-pin](dsh-question-pin/CHANGELOG.md) · [core](dsh-lsp-core/CHANGELOG.md) · [python](dsh-lsp-python/CHANGELOG.md) · [typescript](dsh-lsp-typescript/CHANGELOG.md) · [powershell](dsh-lsp-powershell/CHANGELOG.md) · [java](dsh-lsp-java/CHANGELOG.md)。
 
+## [1.10.3] - 2026-09-20
+
+改进：写入/编辑卡摘要字号接入官方 token + 增减徽章加粗。仅 `dsh-ide-layout` 升级（1.9.3 → 1.9.4），其余七包不变。**适用版本：DSH Desktop 2.0.9**（更早版本未验证）。
+
+### 变更
+
+- **写入/编辑卡摘要字号消费官方 token**（dsh-ide-layout）：`tool-diff-row.tsx` 的摘要串（⇅ 图形、文件名、目录路径、错误行）由写死 `12px` 改为 `var(--dsh-content-font-size-secondary, 12px)`，增减徽章对齐官方 diffStat 的 `calc(secondary − 2px)` 公式；标题（宿主 DisclosureRow）本就消费同款 token。官方「字号大小」与字号偏移类插件（如 dsh-process-colors）现在**整行联动缩放**；token 缺失时回退旧值。默认观感变化：摘要 12px → 次级档（官方 17px 档位下 15px，与读取行一致）、徽章 12 → 13px。
+- **增减徽章固定加粗**：`+N / −N` 数字 `font-weight: 600`（与 ⇅ 图形同重），固定样式、非可调项。
+
+「查看」「复制」按钮与 diff 卡 `└ 摘要行` 维持 12px 控件惯例不变。
+
 ## [1.10.2] - 2026-09-19
 
 改进：工具卡 diff 行字号接入官方 token 体系。仅 `dsh-ide-layout` 升级（1.9.2 → 1.9.3），其余七包不变。**适用版本：DSH Desktop 2.0.9**（更早版本未验证）。

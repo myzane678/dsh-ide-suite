@@ -317,19 +317,21 @@ function injectDiffStatStyle(): void {
   const style = document.createElement('style')
   style.id = DIFFSTAT_STYLE_ID
   style.textContent = [
-    '.ide-diffstat-collapsed{display:inline-flex;align-items:center;gap:6px;min-width:0;}',
-    '.ide-diffstat-glyph{flex-shrink:0;font-size:12px;font-weight:600;font-family:ui-monospace,monospace;}',
+    '.ide-diffstat-collapsed{display:inline-flex;align-items:center;gap:6px;min-width:0;font-size:var(--dsh-content-font-size-secondary, 13px);}',
+    // 摘要文字消费官方次级字号 token（标题同款）：官方/字号插件缩放时整行联动；
+    // token 缺失回退旧写死值。徽章对齐官方 diffStat 的 secondary−2px 公式。
+    '.ide-diffstat-glyph{flex-shrink:0;font-size:var(--dsh-content-font-size-secondary, 12px);font-weight:600;font-family:ui-monospace,monospace;}',
     '.ide-diffstat-filelink{background:none;border:0;padding:0;font:inherit;color:inherit;cursor:pointer;text-decoration:none;}',
     '.ide-diffstat-filelink:hover{text-decoration:underline;}',
-    '.ide-diffstat-dir{color:var(--dsw-alias-label-secondary, #8a8f98);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}',
-    '.ide-diffstat-badge{display:inline-flex;gap:6px;font-size:12px;font-variant-numeric:tabular-nums;flex-shrink:0;}',
+    '.ide-diffstat-dir{color:var(--dsw-alias-label-secondary, #8a8f98);font-size:var(--dsh-content-font-size-secondary, 12px);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}',
+    '.ide-diffstat-badge{display:inline-flex;gap:6px;font-size:calc(var(--dsh-content-font-size-secondary, 13px) - 2px);font-weight:600;font-variant-numeric:tabular-nums;flex-shrink:0;}',
     '.ide-diffstat-badge .ide-diffstat-add{color:var(--ide-diffstat-add, #1a7f37);}',
     '.ide-diffstat-badge .ide-diffstat-del{color:var(--ide-diffstat-del, #cf222e);}',
     'body[data-ds-dark-theme] .ide-diffstat-badge .ide-diffstat-add{color:var(--ide-diffstat-add, #3fb950);}',
     'body[data-ds-dark-theme] .ide-diffstat-badge .ide-diffstat-del{color:var(--ide-diffstat-del, #f85149);}',
     '.ide-diffstat-body{display:flex;flex-direction:column;gap:6px;padding:4px 0 6px;}',
-    '.ide-diffstat-head{display:flex;align-items:center;gap:6px;flex-wrap:wrap;}',
-    '.ide-diffstat-error{color:var(--dsw-alias-label-danger, #d0333c);font-size:12px;white-space:pre-wrap;word-break:break-all;}',
+    '.ide-diffstat-head{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:var(--dsh-content-font-size-secondary, 13px);}',
+    '.ide-diffstat-error{color:var(--dsw-alias-label-danger, #d0333c);font-size:var(--dsh-content-font-size-secondary, 12px);white-space:pre-wrap;word-break:break-all;}',
     '.ide-diffstat-inspect{display:inline-flex;align-items:center;gap:4px;font-size:12px;color:var(--dsw-alias-label-secondary, #8a8f98);}',
     // 目录响应式（借鉴 ZCode）：聊天列窄于 420px 时隐藏目录段，只留文件名。
     // 用 div 前缀精确命中行容器——html 上同名自证属性（data-ide-diffstat 注册
