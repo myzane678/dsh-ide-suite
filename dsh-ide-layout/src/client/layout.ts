@@ -19,6 +19,7 @@
  */
 
 import type { IdeState, LayoutState, ListenerStore } from './store.ts'
+import { setConversationPerf } from './conversation-perf.ts'
 import {
   canFinishDrag,
   canStartDrag,
@@ -264,6 +265,8 @@ export class IdeLayoutController {
     this.sidebarDragAbort = null
     this.sidebarDragPointerId = null
     if (this.dragMode === 'sidebar') this.dragMode = 'none'
+    // 拖动中侧栏 DOM 被宿主重建的兜底：还原原生滚动路径。
+    setConversationPerf(false)
     this.sidebarObserved = sidebar
     this.sidebarHandleObserved = null
     if (sidebar === null) return
@@ -290,6 +293,8 @@ export class IdeLayoutController {
       if (!canStartDrag(this.dragMode, event.isPrimary, event.button)) return
       this.dragMode = 'sidebar'
       this.sidebarDragPointerId = event.pointerId
+      // 拖动帧才启用视口外跳过渲染（常驻会引发向上快滑回弹抖动）。
+      setConversationPerf(true)
       if (this.applyFrame !== null) {
         cancelAnimationFrame(this.applyFrame)
         this.applyFrame = null
@@ -395,6 +400,8 @@ export class IdeLayoutController {
         dragAbort.abort()
         if (this.sidebarDragAbort === dragAbort) this.sidebarDragAbort = null
         this.scheduleApply()
+        // 先还原原生滚动路径再按锚点校正；宿主冲刷终值列宽的 re-wrap 交给锚定。
+        setConversationPerf(false)
       }
       window.addEventListener('pointerup', finish, { capture: true, signal: dragAbort.signal })
       window.addEventListener('pointercancel', finish, { capture: true, signal: dragAbort.signal })
@@ -790,6 +797,8 @@ export class IdeLayoutController {
       let dragFrame = 0
       let pendingX = startX
       this.dragMode = 'chat'
+      // 拖动帧才启用视口外跳过渲染（常驻会引发向上快滑回弹抖动）。
+      setConversationPerf(true)
       if (this.applyFrame !== null) {
         cancelAnimationFrame(this.applyFrame)
         this.applyFrame = null
@@ -830,6 +839,8 @@ export class IdeLayoutController {
         el.removeEventListener('pointercancel', onCancel)
         // 松手后只排一次完整布局，收敛文件树等非拖拽几何。
         this.scheduleApply()
+        // 列宽终值已由 flush() 同步落位，先还原原生滚动路径，再按锚点校正。
+        setConversationPerf(false)
       }
       const onUp = (upEvent: PointerEvent): void => {
         if (upEvent.pointerId === pointerId) finish(upEvent.clientX)
@@ -1091,6 +1102,8 @@ export class IdeLayoutController {
     this.sidebarHandleObserved = null
     this.sidebarDragPointerId = null
     this.dragMode = 'none'
+    // 卸载兜底：不留拖动优化规则，滚动路径还原原生。
+    setConversationPerf(false)
     if (this.applyFrame !== null) {
       cancelAnimationFrame(this.applyFrame)
       this.applyFrame = null

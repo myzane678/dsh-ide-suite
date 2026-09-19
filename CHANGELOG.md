@@ -4,6 +4,18 @@ dsh-ide-suite（monorepo）版本与更新记录，跟随仓库 tag（v0.1.0 起
 
 v0.x 为 `dsh-ide-layout` 单包时代历史（全历史随 subtree 合入保留）；各子包完整明细见其各自 CHANGELOG：[layout](dsh-ide-layout/CHANGELOG.md) · [question-pin](dsh-question-pin/CHANGELOG.md) · [core](dsh-lsp-core/CHANGELOG.md) · [python](dsh-lsp-python/CHANGELOG.md) · [typescript](dsh-lsp-typescript/CHANGELOG.md) · [powershell](dsh-lsp-powershell/CHANGELOG.md) · [java](dsh-lsp-java/CHANGELOG.md)。
 
+## [1.10.1] - 2026-09-19
+
+修复：会话区向上快速滑动的回弹抖动治本。仅 `dsh-ide-layout` 升级（1.9.1 → 1.9.2），其余七包不变。**适用版本：DSH Desktop 2.0.9**（更早版本未验证）。
+
+### 修复
+
+- **向上快滑回弹抖动（治本）**（dsh-ide-layout）：v1.8.0 引入的长会话重排治理（`content-visibility:auto` + 120px 估算占位）为常驻注入，向上快速滚动时上方未渲染行按占位高度逐步还原，列表总高度跳变 + 滚动锚定反复校正，快滑惯性下表现为「冲过头再弹回来」的抖动。改为**仅拖动分栏期间启用**（拖动帧逐帧重排治理不变），滚动路径恢复原生；启用/停用瞬间以视口顶缘第一个可见消息行为锚点做 scrollTop 位移补偿，切换无感。新增 `conversation-perf.ts` 开关模块，侧栏/聊天分栏拖动 + 宿主重建/卸载兜底共 6 处挂钩。
+
+### 版本
+
+dsh-ide-layout 1.9.1 → 1.9.2；dsh-question-pin / dsh-lsp-core / python / typescript / powershell / java / rust 不变。
+
 ## [1.10.0] - 2026-09-18
 
 菜单让位：置顶条在任意下拉菜单打开期间自动隐藏。仅 `dsh-question-pin` 升级（0.2.0 → 0.3.0），其余七包不变。**适用版本：DSH Desktop 2.0.9**（更早版本未验证）。

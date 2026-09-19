@@ -16,6 +16,7 @@ import { ProblemsPanel } from './components/ProblemsPanel.tsx'
 import { BuildOutputDialog } from './components/BuildOutputDialog.tsx'
 import { apiBuild, apiGitRepos, apiGitStatus } from './api.ts'
 import type { BuildResult, BuildTaskName } from './api.ts'
+import { setConversationPerf } from './conversation-perf.ts'
 
 const WORKBENCH_SELECTOR = '[data-ide-workbench]'
 const SIDEBAR_TREE_SELECTOR = '[data-ide-sidebar-tree]'
@@ -61,24 +62,6 @@ function injectConversationWidthHandleHider(): void {
   style.id = 'dsh-ide-layout-hide-conversation-width-handle'
   style.textContent = '[class*="widthHandle"][data-side="left"],[class*="widthHandle"][data-side="right"]'
     + '{visibility:hidden !important;pointer-events:none !important;}'
-  document.head.appendChild(style)
-}
-
-/**
- * 会话长列表的逐帧重排治理：侧栏/聊天区分栏拖动时，聊天列宽度每帧变化，
- * 几百条消息行整棵重排 + 重绘（实测单帧 ~85ms → 全程 ~12fps，拖动抖动）。
- * content-visibility:auto 让视口外的消息行跳过排版与绘制（Chromium 对该属性
- * 有完善的滚动锚定与尺寸记忆），逐帧排版成本坍缩到视口内可见行。
- */
-let conversationPerfStyleInjected = false
-function injectConversationPerformanceStyle(): void {
-  if (conversationPerfStyleInjected) return
-  conversationPerfStyleInjected = true
-  if (document.getElementById('dsh-ide-layout-conversation-perf') !== null) return
-  const style = document.createElement('style')
-  style.id = 'dsh-ide-layout-conversation-perf'
-  style.textContent = '[data-conversation-scroll] [data-chat-anchor-key]'
-    + '{content-visibility:auto;contain-intrinsic-size:auto 120px;}'
   document.head.appendChild(style)
 }
 
@@ -612,7 +595,9 @@ function Workbench({ api }: { api: IdeMountApi }): JSX.Element {
 export function mountPanels(api: IdeMountApi): () => void {
   injectDarkHighlightStyle()
   injectConversationWidthHandleHider()
-  injectConversationPerformanceStyle()
+  // 视口外跳过渲染只在拖动帧启用（常驻会引发向上快滑回弹抖动，见
+  // conversation-perf.ts）；挂载时先清热重载残留的常驻旧规则，保持关闭态。
+  setConversationPerf(false)
   let sidebarRoot: Root | undefined
   let workbenchRoot: Root | undefined
   const disposers: Array<() => void> = []
