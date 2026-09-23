@@ -4,6 +4,33 @@ dsh-ide-suite（monorepo）版本与更新记录，跟随仓库 tag（v0.1.0 起
 
 v0.x 为 `dsh-ide-layout` 单包时代历史（全历史随 subtree 合入保留）；各子包完整明细见其各自 CHANGELOG：[layout](dsh-ide-layout/CHANGELOG.md) · [question-pin](dsh-question-pin/CHANGELOG.md) · [core](dsh-lsp-core/CHANGELOG.md) · [python](dsh-lsp-python/CHANGELOG.md) · [typescript](dsh-lsp-typescript/CHANGELOG.md) · [powershell](dsh-lsp-powershell/CHANGELOG.md) · [java](dsh-lsp-java/CHANGELOG.md)。
 
+## [1.10.4] - 2026-09-23
+
+改进：白色会话区横向可拉伸（插件自建双手柄）+ 手柄竖线按可见白卡分段；修复滚到底部反弹。仅 `dsh-ide-layout` 升级（1.9.4 → 1.9.5），其余七包不变。**适用版本：DSH Desktop 2.0.9**（更早版本未验证）。
+
+### 新增
+
+- **会话区宽度手柄（插件自建，dsh-ide-layout）**：白色对话内容列左右两缘各一条——8px 命中带跨坐白缘（`cursor:col-resize`）、3px 常驻灰竖线压在白缘内侧，hover/拖拽才加深；每帧按实测白缘归位（宿主重建 DOM、拉宽拉窄、侧栏拖动均不脱位），欢迎页 / 轨迹页没有内容列时自动隐藏。
+- **对称缩放**：外拖一格宽涨两格、左右两缘等量外扩，内容列 `max-width + margin:0 auto` 恒居中、竖向中心线不动。
+- **宽度落点与宿主同源**：每帧直写宿主 ConversationRoot 根元素（`.uPhUma_root`）的 `--dsh-chat-user-width`（var() 只在声明元素上求值），松手持久化到宿主 localStorage 键 `dsh.conversation.contentWidth`；钳制：最小 640、硬上限 1200、动态上限 = 根宽 − 176（每侧 88px 安全区）。
+- **皮肤瓷片卡宽度解放**：maid-atelier 皮肤 assistant 白卡原写死 `width:min(680px,96%)`，`mount.tsx` 用 `!important` 抬成跟随会话列，白框才等于列宽、手柄才贴白缘、拖拽才拉得动白框。
+
+### 变更
+
+- **手柄竖线按「可见白卡」分段**（六轮视觉反馈）：常驻细线不再贯穿整列——只在输入框 seat 以上、视口内可见白卡两侧分段绘制，**白卡之间的 gap 不画线**；命中带仍取首尾可见卡并集（整段好拖）。配套 document capture+passive 滚动监听、二分定位首张可见卡、边界夹滚动区与 `data-composer-seat` 顶、每帧剔除 seat 内误中的卡。
+
+### 修复
+
+- **滚到最底部被弹回**：临时诊断的试写探针每 500ms 真写「列宽+50px」再还原，底部 scrollTop 被钳小后不回弹；已移除真写。
+
+### 已知问题（计划下版本修复）
+
+- **非 hover 状态下仅最底部白卡竖线清晰**：常驻色对比度过低 + 颜色事件式粘滞；不影响命中带与拖拽。
+
+### 版本
+
+dsh-ide-layout 1.9.4 → 1.9.5；dsh-question-pin / dsh-lsp-core / python / typescript / powershell / java / rust 不变。
+
 ## [1.10.3] - 2026-09-20
 
 改进：写入/编辑卡摘要字号接入官方 token + 增减徽章加粗。仅 `dsh-ide-layout` 升级（1.9.3 → 1.9.4），其余七包不变。**适用版本：DSH Desktop 2.0.9**（更早版本未验证）。

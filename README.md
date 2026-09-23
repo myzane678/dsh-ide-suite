@@ -1,13 +1,13 @@
 # dsh-ide-suite
 
 [![CI](https://github.com/myzane678/dsh-ide-suite/actions/workflows/ci.yml/badge.svg)](https://github.com/myzane678/dsh-ide-suite/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-1.10.3-blue)](https://github.com/myzane678/dsh-ide-suite/releases)
+[![Version](https://img.shields.io/badge/version-1.10.4-blue)](https://github.com/myzane678/dsh-ide-suite/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D22-green)](https://nodejs.org)
 [![pnpm](https://img.shields.io/badge/pnpm-%3E%3D11-orange)](https://pnpm.io)
-[![Tests](https://img.shields.io/badge/tests-189%20passed-brightgreen)](#开发)
+[![Tests](https://img.shields.io/badge/tests-192%20passed-brightgreen)](#开发)
 
-DSH（DeepSeek Harness）Web GUI 的 IDE 插件套件（monorepo，pnpm workspace）：**编辑器外壳 + 会话置顶条 + LSP 基础设施 + 六语言插件**。v1.9.1——工具行 diff 适配 2.0.9 wire 形状（完成态文件名 + 红绿 diff 恢复）。新增一种语言的 LSP 支持 = 新增一个插件，编辑器零改动。
+DSH（DeepSeek Harness）Web GUI 的 IDE 插件套件（monorepo，pnpm workspace）：**编辑器外壳 + 会话置顶条 + LSP 基础设施 + 六语言插件**。**v1.10.4——白色会话区横向可拉伸**：插件自建双手柄贴白缘、对称缩放（中心线不动）、宽度跨会话记忆（适用 DSH Desktop 2.0.9）。新增一种语言的 LSP 支持 = 新增一个插件，编辑器零改动。
 
 ## 功能特性
 
@@ -26,6 +26,7 @@ DSH（DeepSeek Harness）Web GUI 的 IDE 插件套件（monorepo，pnpm workspac
 - edit/write 工具行行级 diff：收起态中文三态标题 + 文件图标 + +N/−N 增删徽章；展开 LCS 对齐红绿行（行内高亮、统一行号、复制按钮），`pre-wrap` 折行随区宽自适应
 - agent 写盘后编辑器实时刷新：未编辑 tab 自动重读注入（`Transaction.remote`，不置 dirty、照发 LSP didChange）
 - 交付卡片直达编辑区：agent 交付文件卡片的「在侧边栏打开/预览」改为直接跳进编辑区（window 捕获拦截 + aria-label 路径提取；root 外文件与 exe/zip 等二进制产物放行原生侧边栏预览）
+- **白色会话区横向可拉伸**：双手柄贴白缘、对称缩放（中心线不动）、宽度跨会话记忆；竖线只画可见白卡两侧、白卡间 gap 不画线
 
 ### LSP（语言插件决定）
 
@@ -64,12 +65,12 @@ DSH（DeepSeek Harness）Web GUI 的 IDE 插件套件（monorepo，pnpm workspac
 // ~/.dsh/profiles/<profile>/package.json
 {
   "dependencies": {
-    "dsh-ide-layout": "github:myzane678/dsh-ide-suite#v1.9.1",
-    "dsh-lsp-core": "github:myzane678/dsh-ide-suite#v1.9.1",
-    "dsh-lsp-python": "github:myzane678/dsh-ide-suite#v1.9.1",
-    "dsh-lsp-typescript": "github:myzane678/dsh-ide-suite#v1.9.1",
-    "dsh-lsp-java": "github:myzane678/dsh-ide-suite#v1.9.1",
-    "dsh-lsp-rust": "github:myzane678/dsh-ide-suite#v1.9.1",
+    "dsh-ide-layout": "github:myzane678/dsh-ide-suite#v1.10.4",
+    "dsh-lsp-core": "github:myzane678/dsh-ide-suite#v1.10.4",
+    "dsh-lsp-python": "github:myzane678/dsh-ide-suite#v1.10.4",
+    "dsh-lsp-typescript": "github:myzane678/dsh-ide-suite#v1.10.4",
+    "dsh-lsp-java": "github:myzane678/dsh-ide-suite#v1.10.4",
+    "dsh-lsp-rust": "github:myzane678/dsh-ide-suite#v1.10.4",
     // PowerShell 插件用 Release 的 tgz 资产（vendor 不在 git 内）：
     "dsh-lsp-powershell": "https://github.com/myzane678/dsh-ide-suite/releases/download/v1.0.0/dsh-lsp-powershell-1.0.0.tgz"
   },
@@ -93,7 +94,7 @@ git clone https://github.com/myzane678/dsh-ide-suite.git
 cd dsh-ide-suite
 pnpm install                        # 一次安装全部包
 pnpm -r --filter "./*" run build    # 全量构建（dual-face：host esm + browser cjs）
-pnpm -r --filter "./*" test         # 全量测试（143 项）
+pnpm -r --filter "./*" test         # 全量测试（192 项）
 pnpm --filter dsh-lsp-core test     # 单包测试
 ```
 
@@ -127,7 +128,7 @@ LSP 拆分工程的设计与分阶段记录：[docs/lsp-split-design.md](docs/ls
 
 ## 更新日志
 
-见 [CHANGELOG.md](CHANGELOG.md)——v0.1.0 → v1.10.3 逐版记录（v0.x 为 `dsh-ide-layout` 并入前历史）。各子包明细见其各自 CHANGELOG。
+见 [CHANGELOG.md](CHANGELOG.md)——v0.1.0 → v1.10.4 逐版记录（v0.x 为 `dsh-ide-layout` 并入前历史）。各子包明细见其各自 CHANGELOG。
 
 ## 跨插件协作约定（贡献必读）
 

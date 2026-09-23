@@ -19,14 +19,21 @@
  */
 
 import type { IdeState, LayoutState, ListenerStore } from './store.ts'
+import { apiWrite } from './api.ts'
 import { setConversationPerf } from './conversation-perf.ts'
 import {
   canFinishDrag,
   canStartDrag,
   chatWidthFromDrag,
   clampChatWidth,
+  clampContentWidth,
+  CONTENT_EDGE_BUDGET,
+  CONTENT_MIN_PX,
+  CONTENT_WIDTH_KEY,
+  contentWidthFromDrag,
   EDITOR_MIN_PX,
   type DragMode,
+  saveContentWidthPreference,
   shouldSyncSidebarImmediately,
 } from './chat-resize.ts'
 
@@ -179,12 +186,80 @@ const TREE_MAX_RATIO = 0.85
  *  小；窗口变矮时列表只剩一两行）。 */
 const MIN_LIST_PX = 360
 
+/** maid-atelier 皮肤里可见的「白框」= assistant 瓷片卡：assistant-step 下第四层
+ *  div[class*='markdown']（背景 rgba(248,250,255,0.94) + 金边圆角）。选择器形状照抄
+ *  皮肤自己那条（mount.tsx 的宽度解放规则用同一串），不碰 CSS Modules 哈希类名。
+ *  会话区宽度手柄的竖向范围只覆盖这些卡，其它皮肤下匹配为空 → 退回列高。 */
+const CONTENT_CARD_SELECTOR = "[data-chat-flow-kind='assistant-step'] > * > * > * > div[class*='markdown']"
+
+/** 常驻细线的分段池上限：一条命中带里最多画几段（可见白卡通常只有几张，异常长
+ *  会话截到上限为止——多出来的卡不画线也不影响拖拽）。 */
+const CONTENT_SEGMENT_POOL = 12
+/** 分段线上下各收的量：瓷片卡是圆角（18px），直线贴缘会在圆角处多探出一截。 */
+const CONTENT_SEGMENT_INSET = 8
+
+/** 文档序（=竖向序）里二分定位「第一个底边 > top」的卡片下标；没有返回数组长度。
+ *  竖向单调所以二分成立，每帧只读 O(log n) 个 rect——从第 0 张开始线性读会把长
+ *  会话的滚动拖卡（历史教训：逐帧重排正是拖拽卡顿的最后 80ms）。 */
+function firstCardIndexBelow(cards: HTMLElement[], top: number): number {
+  let lo = 0
+  let hi = cards.length - 1
+  let found = cards.length
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1
+    if (cards[mid].getBoundingClientRect().bottom > top) {
+      found = mid
+      hi = mid - 1
+    } else {
+      lo = mid + 1
+    }
+  }
+  return found
+}
+
+/** 取文档序里落在 [top, bottom] 竖向窗口内的卡片（首尾可能被裁切）。可见卡通常只有
+ *  几张，所以定位首张后线性扫到窗口底即可。 */
+function visibleCards(cards: HTMLElement[], top: number, bottom: number): HTMLElement[] {
+  const out: HTMLElement[] = []
+  for (let i = firstCardIndexBelow(cards, top); i < cards.length; i += 1) {
+    const box = cards[i].getBoundingClientRect()
+    if (box.top >= bottom) break
+    out.push(cards[i])
+  }
+  return out
+}
+
 /** The layout controller: embed tree, place workbench, squeeze chat. */
 export class IdeLayoutController {
   private frame: HTMLElement | null = null
   private chatHandle: HTMLDivElement | null = null
   /** agent 卡轮廓兼气隙框：外扩 GAP 的粗边框浮层（一体式，替代垫条+补块）。 */
   private chatFrameHost: HTMLDivElement | null = null
+  /** 白色会话区（宿主 ChatView 的居中列）与其左右宽度手柄（插件自建）。 */
+  private contentColumn: HTMLElement | null = null
+  private contentHandles: HTMLDivElement[] = []
+  /** 列内白卡元素数组（文档序 = 竖向序）、裁剪它们的滚动容器、输入框边界：滚动帧
+   *  复用，避免每帧 querySelectorAll + 全量读 rect（长会话里那是随内容线性增长的
+   *  重活）。 */
+  private contentCards: HTMLElement[] = []
+  private contentScroller: HTMLElement | null = null
+  private contentComposer: HTMLElement | null = null
+  /** 每条命中带的分段线池（与 contentHandles 同序：0=左、1=右）。 */
+  private contentHandleSegments: HTMLDivElement[][] = []
+  /** 滚动帧 rAF 句柄与会话滚动监听：滚动不触发 apply，手柄归位必须自己听。 */
+  private contentScrollFrame = 0
+  private contentScrollListener: ((event: Event) => void) | null = null
+  /** 【临时诊断】真实几何落盘：上次写出的签名 + 采样定时器。定位完就删。 */
+  private bandDebugSignature = ''
+  private bandDebugTimer: number | null = null
+  /** 【临时诊断】拖拽轨迹（最近几条），随落盘一起输出。 */
+  private bandDebugDrag: string[] = []
+  /** 当前生效的会话区目标宽度（0 = 未拖过，跟随宿主默认/持久化值）。 */
+  private contentWidth = 0
+  /** 宿主持有者写入 --dsh-chat-user-width 的根元素（ConversationRoot 的 root）：
+   *  宿主在它上面内联 set/remove，写在 body 上会被这个 inline 值遮蔽（var() 就在
+   *  该元素上求值），所以必须写到同一个元素，拖拽才生效。 */
+  private contentWidthHost: HTMLElement | null = null
   /** 侧栏气隙框：填「窗缘↔侧栏」左缝与「侧栏↔窗底」底缝——chatFrame 只管
    *  侧栏右缘之外的缝，侧栏左/底两向的 margin 缝此前露 body 底色没填绿。 */
   private sidebarFrameHost: HTMLDivElement | null = null
@@ -446,10 +521,19 @@ export class IdeLayoutController {
    * 该 mutation 目标是否可能影响本插件管理的布局。
    * 排除两类噪声：① 对话滚动区内部（消息挂载/卸载/内容更新，与布局无关）
    * ② 本插件自己的 host 内部（文件树/编辑器/工作台由自身 React 管理）。
+   *
+   * 例外：白色会话列本身长在 ① 里，而它只由「是否有会话」决定——开机首次 apply
+   * 与对话渲染竞速、或切会话时宿主重建 flow，列都是**新建的 DOM**。若一律按噪声
+   * 跳过，就再没有触发器会跑 apply 归位手柄（contentColumn 永久为 null，或停在
+   * 已断开旧列的坐标上）→ 会话区宽度手柄永远不显示。所以列还没就位时，会话区内
+   * 的变动一律放行；列已就位后仍按噪声跳过（消息滚动性能不受影响）。
    */
   private isLayoutRelevant(target: Node): boolean {
     const el = target.nodeType === 1 ? (target as HTMLElement) : target.parentElement
     if (el === null) return false
+    // 列尚未就位（欢迎页/竞速失败）或已被宿主换掉 → 会话区变动就是「列来了」的信号。
+    const columnReady = this.contentColumn !== null && this.contentColumn.isConnected
+    if (!columnReady && el.closest('[data-conversation-scroll]') !== null) return true
     if (el.closest('[data-conversation-scroll]') !== null) return false
     if (el.closest('[data-ide-sidebar-tree],[data-ide-workbench]') !== null) return false
     return true
@@ -597,6 +681,11 @@ export class IdeLayoutController {
     })
 
     this.chatHandle = this.createChatHandle()
+    this.contentHandles = this.createContentHandles()
+    // 滚动会改变可见白卡范围，而滚动不会触发 apply——手柄竖向归位自己听。
+    this.bindContentScroll()
+    // 【临时诊断】真实几何（CSS px）每 500ms 落盘一次，定位完删。
+    this.startBandDebug()
     // WCO（桌面无边框窗口）标题栏几何变化 → 重测 fixed 元素的 top 偏移。
     const overlay = wco()
     if (overlay !== undefined && this.wcoGeometryHandler === null) {
@@ -856,6 +945,563 @@ export class IdeLayoutController {
     return el
   }
 
+  /**
+   * 白色会话区左右两缘的宽度手柄（插件自建）。
+   *
+   * 为什么不复用宿主持有者的手柄：宿主 `WidthHandle` 的定位公式以**卡片中心**为
+   * 基准（`right: calc(50% + 列宽/2 + 24px)`），而内容列真实中心因 scrollBody 的
+   * `scrollbar-gutter:stable` 偏了半个槽宽，灰线又再往带内 16px——实测落在白缘外
+   * 约 30px 的壁纸上；且该手柄在本环境下压根不产出可见输出（逐像素穷举无灰线）。
+   * 自建手柄直接贴**实测白缘**，几何永远对得上。
+   *
+   * 命中带 8px 跨坐在白缘上（左右各 4px）。常驻细线**按可见白卡分段画**（见
+   * renderContentSegments）：大都督 2026-09-22 明确「竖线只应该存在于白色卡片的
+   * 两侧」——两张白卡之间的 gap 里不画线，只有贴着白卡的那几段有。命中带仍取首尾
+   * 可见卡的并集（整段可抓、好拖），但底色常驻透明，显色只发生在分段线上。
+   */
+  private createContentHandles(): HTMLDivElement[] {
+    const sides: Array<'left' | 'right'> = ['left', 'right']
+    return sides.map((side) => {
+      const el = document.createElement('div')
+      el.className = 'ide-content-handle'
+      el.dataset.ideContentHandle = side
+      el.title = '拖拽调整会话区宽度'
+      // z:10 与 workbench / chatHandle 同层（主内容层）：宿主浮层（设置页 z-20）
+      // 打开时在其下不抢点击；display 由 positionContentHandles() 按实测几何控制。
+      el.style.cssText = 'position:fixed;z-index:10;width:8px;top:0;bottom:0;display:none;'
+        + 'cursor:col-resize;touch-action:none;user-select:none;'
+      // 分段线池：一条命中带里按可见白卡数量取用，多余的隐藏。
+      const segments: HTMLDivElement[] = []
+      for (let i = 0; i < CONTENT_SEGMENT_POOL; i += 1) {
+        const line = document.createElement('div')
+        line.style.cssText = 'position:absolute;width:3px;pointer-events:none;display:none;'
+        // 左手柄：线占 [白缘, 白缘+3]；右手柄：线占 [白缘-3, 白缘]（带内偏移 4px/1px）。
+        line.style.left = side === 'left' ? '4px' : '1px'
+        // important 反制皮肤全局透明规则（与绿环/气隙框同款套路）。
+        this.setContentHandleLine(line, false)
+        el.appendChild(line)
+        segments.push(line)
+      }
+      this.contentHandleSegments.push(segments)
+      el.addEventListener('mouseenter', () => this.setContentHandlesActive(el, true))
+      el.addEventListener('mouseleave', () => this.setContentHandlesActive(el, false))
+      el.addEventListener('pointerdown', (event) => this.onContentHandleDown(event, side))
+      document.body.appendChild(el)
+      return el
+    })
+  }
+
+  /** hover/拖拽时整条命中带里的分段线一起显色（只改颜色，不动几何）。 */
+  private setContentHandlesActive(band: HTMLDivElement, active: boolean): void {
+    const index = this.contentHandles.indexOf(band)
+    if (index < 0) return
+    for (const line of this.contentHandleSegments[index]) {
+      if (line.style.display !== 'none') this.setContentHandleLine(line, active)
+    }
+  }
+
+  /** 灰竖线上色：常驻极淡（近乎无色，不抢内容）、hover/拖拽才显色（只改颜色，
+   *  不动几何）。大都督 2026-09-22：默认太明显，要「没有颜色的灰」，鼠标放上去
+   *  再有颜色。 */
+  private setContentHandleLine(line: HTMLDivElement, active: boolean): void {
+    line.style.setProperty('background', active ? 'rgba(52,58,68,0.9)' : 'rgba(128,132,140,0.2)', 'important')
+  }
+
+  /**
+   * 会话区宽度拖拽：左右任一缘、**对称缩放**（外拖一格宽涨两格，竖向中心线不动），
+   * 每帧 rAF 直写宿主持有者的变量 `--dsh-chat-user-width`——写在宿主
+   * ConversationRoot 的根元素上（宿主只在这个元素上内联 set/remove，写在 body 上
+   * 会被它的 inline 值遮蔽，列 `max-width + margin:0 auto` 天然保持居中）；松手
+   * 持久化到宿主的 localStorage 键。
+   */
+  private onContentHandleDown(event: PointerEvent, side: 'left' | 'right'): void {
+    if (!canStartDrag(this.dragMode, event.isPrimary, event.button)) return
+    const column = this.contentColumn
+    if (column === null) return
+    this.bandDebugDrag.push(`down side=${side} x=${Math.round(event.clientX)} w=${Math.round(column.getBoundingClientRect().width)} max=${Math.round(this.contentColumnMax(column))}`)
+    event.preventDefault()
+    const startWidth = column.getBoundingClientRect().width
+    const maxWidth = this.contentColumnMax(column)
+    const startX = event.clientX
+    const pointerId = event.pointerId
+    let frame = 0
+    let pendingX = startX
+    this.dragMode = 'chat'
+    // 拖动帧才启用视口外跳过渲染（与另两条拖拽链路一致）。
+    setConversationPerf(true)
+    if (this.applyFrame !== null) {
+      cancelAnimationFrame(this.applyFrame)
+      this.applyFrame = null
+    }
+
+    const flush = (): void => {
+      frame = 0
+      const width = clampContentWidth(maxWidth, contentWidthFromDrag(startWidth, pendingX - startX, side))
+      if (width === this.contentWidth) return
+      this.contentWidth = width
+      // 写在宿主根元素上（它自己的 inline 值优先于 body 继承值）；结构定位失败时
+      // 才退回 body（旧行为），保证任何形态下都有一个生效的写入点。
+      let host = this.contentWidthHost
+      if (host === null || !host.isConnected) host = this.findContentWidthHost(column)
+      this.contentWidthHost = host
+      const value = `${Math.round(width)}px`
+      if (host !== null) host.style.setProperty('--dsh-chat-user-width', value)
+      else document.body.style.setProperty('--dsh-chat-user-width', value)
+      this.bandDebugDrag.push(`write ${value} -> ${host === null ? 'body' : String(host.className).slice(0, 40)} col=${Math.round(column.getBoundingClientRect().width)}`)
+      // 列宽已变 → 白缘位移，手柄同帧归位（拖拽帧不等 apply；卡片集合没变，
+      // 复用数组 + 二分，成本 O(log n)）。
+      this.positionContentHandles(false)
+    }
+    const onMove = (moveEvent: PointerEvent): void => {
+      if (moveEvent.pointerId !== pointerId) return
+      pendingX = moveEvent.clientX
+      if (frame === 0) frame = requestAnimationFrame(flush)
+    }
+    const onUp = (): void => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onCancel)
+      if (frame !== 0) {
+        cancelAnimationFrame(frame)
+        frame = 0
+      }
+      flush()
+      if (this.contentWidth > 0) saveContentWidthPreference(this.contentWidth)
+      this.bandDebugDrag.push(`up saved=${this.contentWidth}`)
+      if (this.dragMode === 'chat') this.dragMode = 'none'
+      setConversationPerf(false)
+      // 列宽终值已同步落位，按新白缘归位手柄后再收敛其余几何。
+      this.apply(true)
+      this.scheduleApply()
+    }
+    const onCancel = (): void => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onCancel)
+      if (frame !== 0) {
+        cancelAnimationFrame(frame)
+        frame = 0
+      }
+      if (this.dragMode === 'chat') this.dragMode = 'none'
+      setConversationPerf(false)
+      this.scheduleApply()
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointercancel', onCancel)
+  }
+
+  /** 会话区宽度上限的来源：与宿主持有者同源——宿主根元素宽度 − 176（每侧 88px
+   *  手柄安全区）。以前用 column.parentElement（flow 滚动区）的 clientWidth 扣
+   *  padding，比宿主基准窄 64px，两套公式对不上；现在统一取宿主根宽度。 */
+  private contentColumnMax(column: HTMLElement): number {
+    const host = this.contentWidthHost ?? this.findContentWidthHost(column)
+    const basis = host ?? column.parentElement
+    if (basis === null) return CONTENT_MIN_PX
+    return Math.max(CONTENT_MIN_PX, basis.offsetWidth - CONTENT_EDGE_BUDGET)
+  }
+
+  /**
+   * 宿主持有者写入宽度的根元素 = `.uPhUma_root`（ConversationRoot 的 root）。
+   *
+   * 为什么必须落在 root 上：`--dsh-chat-content-width: var(--dsh-chat-user-width,
+   * clamp(680px, 列宽×.64, 920px))` 声明在 root 上，var() 只在 root 上求值。写在
+   * 列 / flow 滚动区这些**子孙**元素上，root 的解析结果一动不动，列宽毫无变化——
+   * 这就是「拖了没反应」的真正原因。宿主自己（app.asar ui-conversation/
+   * skeleton/ConversationRoot.js 的 publishWidths / rootResizeRef）也是内联写在
+   * 这个元素上，有偏好时它的 inline 值还会遮蔽从 body 继承下去的值，所以必须写到
+   * 同一个元素才生效。
+   *
+   * 怎么定位 root（结构定位，不碰哈希类名，按可靠性排序）：
+   * ① publishWidths 每次都给 root 内联写 `--dsh-conversation-column-width`
+   *    （rootResizeRef 的 ResizeObserver 驱动）——带这个内联变量的祖先就是 root；
+   * ② root 上挂 `data-phase`（settling / hero / active）；
+   * ③ 都不命中才退回「最外层声明 --dsh-composer-side-clearance 的祖先」。
+   *
+   * 历史坑：旧判据从**列本身**开始找 ② 是错的——自定义属性会继承（asar 里没有
+   * `@property … inherits:false` 注册），列自己就算出 16px，结果只写到子孙元素上。
+   */
+  private findContentWidthHost(column: HTMLElement): HTMLElement | null {
+    let el: HTMLElement | null = column
+    let byPhase: HTMLElement | null = null
+    let byClearance: HTMLElement | null = null
+    while (el !== null && el !== document.body) {
+      if (el.style.getPropertyValue('--dsh-conversation-column-width').trim() !== '') return el
+      if (byPhase === null && el.hasAttribute('data-phase')) byPhase = el
+      if (getComputedStyle(el).getPropertyValue('--dsh-composer-side-clearance').trim() !== '') {
+        byClearance = el
+      }
+      el = el.parentElement
+    }
+    return byPhase ?? byClearance
+  }
+
+  /**
+   * 找白色会话区（宿主 ChatView 的居中列）。
+   *
+   * 为什么不按「margin:auto + max-width」从滚动区向下 BFS：那套判据在
+   * 2.0.9 + maid-atelier 皮肤下匹配不上（大都督 DevTools 实测 BFS 未命中，而列
+   * 明明在那儿、max-width 也有值——被皮肤/宿主改动后 margin 不再是 auto），而且
+   * 每层都要 getComputedStyle，长会话里代价随内容线性增长。
+   *
+   * 现在锚定宿主自己的标记：ChatView 在每条会话流条目上挂 `data-chat-flow-kind`
+   * （皮肤重度依赖它），条目就在内容列里；列是它的祖先中**最外层**那个 max-width
+   * 为 px 的盒子（列 = `width:100% + max-width:var(--dsh-chat-content-width)`，
+   * 它上面各层都没有 max-width）——深度无关，一次 querySelector 加几跳父链。
+   */
+  private findContentColumn(): HTMLElement | null {
+    const scroll = document.querySelector<HTMLElement>('[data-conversation-scroll]')
+    if (scroll === null) return null
+    const anchor = scroll.querySelector<HTMLElement>('[data-chat-flow-kind]')
+      ?? scroll.querySelector<HTMLElement>('[data-chat-flow]')
+    let el: HTMLElement | null = anchor
+    let column: HTMLElement | null = null
+    while (el !== null && el !== scroll) {
+      if (getComputedStyle(el).maxWidth.endsWith('px')) column = el
+      el = el.parentElement
+    }
+    return column ?? this.findContentColumnByScan(scroll)
+  }
+
+  /** 兜底：按计算样式结构定位（margin:auto + max-width，BFS 限深 6 层）。主路径
+   *  不命中时才跑，成本只在异常形态下发生。 */
+  private findContentColumnByScan(scroll: HTMLElement): HTMLElement | null {
+    let frontier: HTMLElement[] = [scroll]
+    for (let depth = 0; depth < 6 && frontier.length > 0; depth += 1) {
+      const next: HTMLElement[] = []
+      for (const parent of frontier) {
+        for (const child of Array.from(parent.children)) {
+          if (!(child instanceof HTMLElement)) continue
+          next.push(child)
+          const style = getComputedStyle(child)
+          if (style.marginLeft === 'auto' && style.marginRight === 'auto'
+            && style.maxWidth !== 'none' && style.maxWidth !== '') {
+            return child
+          }
+        }
+      }
+      frontier = next
+    }
+    return null
+  }
+
+  /**
+   * 手柄归位：横向贴在**实测白缘**上（左带 [缘-4, 缘+4]、右带对称）；竖向只覆盖
+   *  **可见白卡**（不是整条会话列）——列从深色标签栏一直铺到窗底壁纸，按列高画就会
+   *  得到一条从上到下贯穿 agent 区的灰线（大都督 2026-09-22 反馈「很难看」）。
+   *  列找不到（欢迎页/轨迹页/宿主重建中）时整体隐藏。
+   *
+   *  refreshCards=false 给滚动帧/拖拽帧用：卡片集合没变（只是位置变了），复用数组
+   *  + 二分查找，把每帧成本压到 O(log n) 次 rect 读取。
+   */
+  private positionContentHandles(refreshCards = true): void {
+    if (this.contentHandles.length === 0) return
+    if (this.contentColumn === null || !this.contentColumn.isConnected) {
+      this.contentColumn = this.findContentColumn()
+      this.contentCards = []
+      this.contentScroller = null
+      this.contentComposer = null
+    }
+    const column = this.contentColumn
+    if (column === null) {
+      for (const el of this.contentHandles) el.style.display = 'none'
+      return
+    }
+    const rect = column.getBoundingClientRect()
+    if (rect.width <= 0 || rect.height <= 0 || rect.bottom <= 0 || rect.top >= window.innerHeight) {
+      for (const el of this.contentHandles) el.style.display = 'none'
+      return
+    }
+    // 结构变了（新消息/宿主重建）才重查卡片；滚动帧/拖拽帧只做位置测算。O(n) 的
+    // 连通性检查不碰布局，比每帧 querySelectorAll 便宜得多。
+    if (refreshCards || this.contentCards.length === 0
+      || this.contentCards.some((card) => !card.isConnected)) {
+      this.contentCards = Array.from(column.querySelectorAll<HTMLElement>(CONTENT_CARD_SELECTOR))
+    }
+    const { band, visible } = this.measureContentBand(column, rect)
+    for (const el of this.contentHandles) {
+      const edge = el.dataset.ideContentHandle === 'left' ? rect.left : rect.right
+      el.style.top = `${band.top}px`
+      el.style.bottom = `${Math.max(0, window.innerHeight - band.bottom)}px`
+      el.style.left = `${edge - 4}px`
+      el.style.display = 'block'
+      // 常驻细线按可见白卡分段（gap 里不画线）；命中带本身保持整段可抓。
+      this.renderContentSegments(el, band.top, band.bottom, visible)
+    }
+    // 列已就位：缓存宿主宽度根元素（拖拽写入用）。列丢失后的重找由
+    // isLayoutRelevant() 放行会话区变动触发 apply 完成，不另加观察器。
+    if (this.contentWidthHost === null || !this.contentWidthHost.isConnected) {
+      this.contentWidthHost = this.findContentWidthHost(column)
+    }
+  }
+
+  /**
+   * 会话滚动 → 手柄竖向范围跟着走。
+   *
+   *  为什么必须自己听：滚动在本插件里一律当噪声过滤（isLayoutRelevant 第二条），
+   *  不会触发 apply；而白卡的可见范围是随滚动变的。不听 scroll，手柄就冻在上次
+   *  apply 时的几何上——大都督把会话往回拉，灰线照样压在工具调用那片非白区上
+   *  （2026-09-22 第二轮反馈）。
+   *
+   *  scroll 事件不冒泡，但**捕获阶段**能收到任意元素的滚动，所以在 document 上开
+   *  capture + passive；命中「列自身 / 列内 / 列的祖先」才算数（滚动容器究竟在
+   *  五层壳的哪一层不确定，三种都放过），rAF 合并到每帧一次。
+   */
+  private bindContentScroll(): void {
+    if (this.contentScrollListener !== null) return
+    const listener = (event: Event): void => {
+      const target = event.target
+      if (!(target instanceof HTMLElement)) return
+      const column = this.contentColumn
+      if (column === null || !column.isConnected) return
+      if (!column.contains(target) && !target.contains(column)) return
+      if (this.contentScrollFrame !== 0) return
+      this.contentScrollFrame = requestAnimationFrame(() => {
+        this.contentScrollFrame = 0
+        this.positionContentHandles(false)
+      })
+    }
+    document.addEventListener('scroll', listener, { capture: true, passive: true })
+    this.contentScrollListener = listener
+  }
+
+  /**
+   * 竖向范围 = 视口内**可见白卡**（首尾取并集作命中带），并给出分段线要覆盖的卡片。
+   * 两条硬边界：① 上/下夹**滚动区**（卡片被滚出时线头不越到标签栏/窗底壁纸）；
+   * ② 底部不许越过输入框 seat 的顶（大都督 2026-09-22：只要输入框上面，下面全部
+   * 截掉）。一张白卡都没有（欢迎页/轨迹页）时退回列高——那些视图本就是整列浅底。
+   *
+   * 输入框 seat 里的卡片**每帧都剔**：数组可能过期（用户刚在输入框里打字/带出引用
+   * 条，而这类变动被 isLayoutRelevant 当噪声过滤、不触发重建）。纯 contains 判断不碰
+   * 布局，比读 rect 便宜两三个数量级。
+   *
+   * 为什么用二分定位首张：卡片可能有几百张，每帧从第 0 张开始读 rect 会把滚动拖卡
+   * （历史教训：逐帧重排正是拖拽卡顿的最后 80ms）。文档序 = 竖向序，二分一次定位
+   * 首张可见卡，再向后线性扫到视口底——可见卡通常只有几张。
+   */
+  private measureContentBand(column: HTMLElement, rect: DOMRect): {
+    band: { top: number; bottom: number }
+    visible: HTMLElement[]
+  } {
+    const seat = this.findComposerSeat(column)
+    const cards = seat === null
+      ? this.contentCards
+      : this.contentCards.filter((card) => !seat.contains(card))
+    const scope = this.findContentScroller() ?? column
+    const scopeRect = scope.getBoundingClientRect()
+    const scopeTop = Math.max(0, scopeRect.top)
+    let scopeBottom = Math.min(window.innerHeight, scopeRect.bottom)
+    if (seat !== null) scopeBottom = Math.min(scopeBottom, Math.max(0, seat.getBoundingClientRect().top))
+    const visible = visibleCards(cards, scopeTop, scopeBottom)
+    const fallback = { top: Math.max(0, rect.top), bottom: Math.min(window.innerHeight, rect.bottom) }
+    if (visible.length === 0) return { band: fallback, visible }
+    const firstBox = visible[0].getBoundingClientRect()
+    const lastBox = visible[visible.length - 1].getBoundingClientRect()
+    return {
+      band: {
+        top: Math.max(0, Math.min(scopeBottom, Math.max(firstBox.top, scopeTop))),
+        bottom: Math.max(0, Math.min(scopeBottom, Math.max(lastBox.bottom, scopeTop))),
+      },
+      visible,
+    }
+  }
+
+  /**
+   * 常驻细线按**可见白卡**分段：只在白卡覆盖的竖向范围画，卡片之间的 gap 里不画
+   * （大都督 2026-09-22：「竖线只应该存在于白色卡片的两侧」）。命中带本身仍是首尾
+   * 并集的一段（抓手大、好拖），底色常驻透明，显色只发生在分段线上。
+   * 段元素用池复用：可见卡通常几张，多的隐藏；极端长会话截到池上限为止。
+   */
+  private renderContentSegments(band: HTMLDivElement, bandTop: number, bandBottom: number, visible: HTMLElement[]): void {
+    const index = this.contentHandles.indexOf(band)
+    if (index < 0) return
+    const pool = this.contentHandleSegments[index]
+    let used = 0
+    for (const card of visible) {
+      if (used >= pool.length) break
+      const box = card.getBoundingClientRect()
+      if (box.bottom <= bandTop || box.top >= bandBottom) continue
+      // 上下各收一点：瓷片卡是圆角，直线贴缘会在圆角处多探出一截。
+      const top = Math.max(bandTop, box.top) + CONTENT_SEGMENT_INSET
+      const bottom = Math.min(bandBottom, box.bottom) - CONTENT_SEGMENT_INSET
+      if (bottom <= top) continue
+      const line = pool[used]
+      line.style.display = 'block'
+      line.style.top = `${Math.round(top - bandTop)}px`
+      line.style.bottom = `${Math.round(bandBottom - bottom)}px`
+      used += 1
+    }
+    for (let i = used; i < pool.length; i += 1) pool[i].style.display = 'none'
+  }
+
+  /**
+   * 输入框 seat：宿主 ConversationRoot 的滚动容器（`[data-conversation-scroll]`）里
+   * 挂 `data-composer-seat` 的 sticky 编辑器栈（统计 dock＋输入 dock＋输入栏）。
+   *
+   * 为什么用它当边界：宿主自己就拿它的 top 当「消息区可见底」——app.asar
+   * ui-conversation/chat/ChatView.js 的 pagingAnchor：
+   * `scrollport.querySelector("[data-composer-seat]")?.getBoundingClientRect().top`，
+   * ConversationRoot.js 也在 `scrollerOf(local).querySelector("[data-composer-seat]")`
+   * 定位它。这是宿主给的稳定钩子，比「从 textarea 向上找第一个不透明祖先」可靠：
+   * 后者会被消息区里的 textarea（command-input 一类节点）或输入框内部 wrapper 带偏
+   * （2026-09-22 实测：线被钳到一个 1458px 高的奇怪元素上，照样穿到输入框下面）。
+   */
+  private findComposerSeat(column: HTMLElement): HTMLElement | null {
+    const cached = this.contentComposer
+    if (cached !== null && cached.isConnected) return cached
+    const seat = column.closest<HTMLElement>('[data-conversation-scroll]')
+      ?.querySelector<HTMLElement>('[data-composer-seat]') ?? null
+    this.contentComposer = seat
+    return seat
+  }
+
+  /**
+   * 真正裁剪白卡的滚动容器：列的五层壳（_scroll/_root/viewArea/scrollBody）里
+   * overflow-y 可滚且内容确实超出的那一层。从一张卡片向上找到 document.body 为止，
+   *  找不到（欢迎页/宿主重建中）返回 null——调用方退回用列兜底。结构定位，不碰
+   *  CSS Modules 哈希类名。
+   */
+  private findContentScroller(): HTMLElement | null {
+    const cached = this.contentScroller
+    if (cached !== null && cached.isConnected) return cached
+    let el: HTMLElement | null = this.contentCards[0] ?? this.contentColumn
+    while (el !== null && el !== document.body) {
+      if (el.scrollHeight > el.clientHeight + 1) {
+        const overflowY = getComputedStyle(el).overflowY
+        if (overflowY === 'auto' || overflowY === 'scroll' || overflowY === 'overlay') {
+          this.contentScroller = el
+          return el
+        }
+      }
+      el = el.parentElement
+    }
+    return null
+  }
+
+  /**
+   * 【临时诊断】把会话区宽度手柄的**真实几何（CSS px）**写进工作区
+   * `.dsh-ide-band-debug.json`，宿主外直接读文件即可，不用截图、不用 DevTools。
+   *
+   * 为什么绕这一圈：① 截图是 DPI 缩放后的像素，和 CSS px 对不上（大都督 2026-09-22
+   * 明确指出「量出来不是真实尺度」）；② CDP 9223 日常不通，宿主 JSON-RPC 端口要
+   * 鉴权，都拿不到运行时真值。插件自己跑在渲染器里，用宿主的 /dsh-ide/write 路由
+   * 把实测几何落盘是最可靠的一条路。定位完连本方法一起删。
+   *
+   * 采样：定时 + 签名去重——几何没变就不写，滚动/拖拽时最多每 500ms 一份。
+   */
+  private startBandDebug(): void {
+    if (this.bandDebugTimer !== null) return
+    this.bandDebugTimer = window.setInterval(() => this.dumpContentBand(), 500)
+  }
+
+  private dumpContentBand(): void {
+    if (this.contentHandles.length === 0) return
+    if (this.contentHandles.every((el) => el.style.display !== 'block')) return
+    const box = (el: Element | null | undefined): Record<string, number> | null => {
+      if (el === null || el === undefined) return null
+      const r = el.getBoundingClientRect()
+      return { t: Math.round(r.top), b: Math.round(r.bottom), l: Math.round(r.left), r: Math.round(r.right) }
+    }
+    const column = this.contentColumn
+    const seat = column === null ? null : this.findComposerSeat(column)
+    const scroller = this.findContentScroller()
+    const cards = seat === null
+      ? this.contentCards
+      : this.contentCards.filter((card) => !seat.contains(card))
+    const scopeRect = (scroller ?? column)?.getBoundingClientRect()
+    const scopeTop = Math.max(0, scopeRect?.top ?? 0)
+    let scopeBottom = Math.min(window.innerHeight, scopeRect?.bottom ?? window.innerHeight)
+    if (seat !== null) scopeBottom = Math.min(scopeBottom, Math.max(0, seat.getBoundingClientRect().top))
+    const visible = visibleCards(cards, scopeTop, scopeBottom)
+    const payload = {
+      vh: window.innerHeight,
+      dpr: window.devicePixelRatio,
+      column: box(column),
+      columnCls: column === null ? null : String(column.className).slice(0, 60),
+      scroller: box(scroller),
+      scrollerCls: scroller === null ? null : String(scroller.className).slice(0, 60),
+      seat: box(seat),
+      seatCls: seat === null ? null : String(seat.className).slice(0, 60),
+      first: box(visible[0] ?? null),
+      last: box(visible[visible.length - 1] ?? null),
+      segments: visible.map((card) => {
+        const b = card.getBoundingClientRect()
+        return [Math.round(b.top), Math.round(b.bottom)]
+      }),
+      cards: { total: this.contentCards.length, outsideSeat: cards.length, visible: visible.length },
+      bands: this.contentHandles.map((el) => ({ side: el.dataset.ideContentHandle, top: el.style.top, bottom: el.style.bottom })),
+      handles: this.contentHandles.map((el) => ({
+        side: el.dataset.ideContentHandle,
+        top: el.style.top,
+        bottom: el.style.bottom,
+        left: el.style.left,
+      })),
+      ...this.describeWriteTarget(),
+      drag: this.bandDebugDrag.slice(-8),
+      // 【临时诊断】分段线上屏结果回读：display/样式/真实 rect，区分
+      // 「没画（计算跳过）/画错（高度或位置不对）/被盖住（rect 正常却看不见）」。
+      segmentScreen: this.contentHandles.map((bandEl) => {
+        const bandIndex = this.contentHandles.indexOf(bandEl)
+        return this.contentHandleSegments[bandIndex].slice(0, 6).map((line) => {
+          const r = line.getBoundingClientRect()
+          return {
+            d: line.style.display === 'block' ? 1 : 0,
+            t: line.style.top,
+            b: line.style.bottom,
+            h: Math.round(r.height),
+            rt: Math.round(r.top),
+            bg: line.style.background,
+          }
+        })
+      }),
+    }
+    const signature = JSON.stringify(payload)
+    if (signature === this.bandDebugSignature) return
+    this.bandDebugSignature = signature
+    const root = this.ide.getSnapshot().root
+    if (root === '') return
+    void apiWrite(root, '.dsh-ide-band-debug.json', `${JSON.stringify({ at: new Date().toISOString(), ...payload }, null, 2)}\n`)
+      .catch(() => { /* 诊断落盘失败不影响布局 */ })
+  }
+
+  /**
+   * 【临时诊断】写入点只读描述：给出 findContentWidthHost() 找到的元素
+   * （app.asar publishWidths 的目标）几何、内联变量与偏好值，不落任何写入。
+   *
+   * 以前这里会真写一次「列宽 +50px」再还原以验证写入点是否生效；落盘已证明
+   * 有效（writeTargetWorks=true），但周期性试写让卡片每 500ms 重排一次、内容
+   * 总高抖一下——大都督滚到底部时 scrollTop 已达最大值，总高变小会把 scrollTop
+   * 钳小，还原后不自动加回，视觉上就是「滚到底被弹回」（2026-09-22 晚定位）。
+   * 试写已完成使命，移除；写入是否生效改由真实拖拽本身验证。定位完连本方法删。
+   */
+  private describeWriteTarget(): Record<string, unknown> {
+    const column = this.contentColumn
+    if (column === null) return {}
+    const host = this.contentWidthHost ?? this.findContentWidthHost(column)
+    const describe = (el: HTMLElement | null): Record<string, unknown> | null => {
+      if (el === null) return null
+      const r = el.getBoundingClientRect()
+      return {
+        cls: String(el.className).slice(0, 60),
+        t: Math.round(r.top),
+        b: Math.round(r.bottom),
+        l: Math.round(r.left),
+        r: Math.round(r.right),
+        w: Math.round(r.width),
+        inlineColumnWidth: el.style.getPropertyValue('--dsh-conversation-column-width'),
+        inlineUserWidth: el.style.getPropertyValue('--dsh-chat-user-width'),
+        computedContentWidth: getComputedStyle(el).getPropertyValue('--dsh-chat-content-width').trim(),
+        hasDataPhase: el.hasAttribute('data-phase'),
+      }
+    }
+    return {
+      writeTarget: describe(host),
+      pref: localStorage.getItem(CONTENT_WIDTH_KEY),
+      pluginContentWidth: this.contentWidth,
+      pluginMax: Math.round(this.contentColumnMax(column)),
+    }
+  }
+
   /** Squeeze the chat column and place the workbench portal + chat handle.
    *  中栏按需显隐：编辑区（editorVisible）与终端面板（termVisible）都关闭时
    *  回到原生两栏（工作区 sidebar | agent chat）；任一打开即显示中栏——
@@ -998,6 +1644,8 @@ export class IdeLayoutController {
       this.chatHandle.style.left = `${this.sidebarWidth + work - CARD_GAP}px`
       this.chatHandle.style.display = shown ? 'block' : 'none'
     }
+    // 会话区宽度手柄贴实测白缘归位（拖拽帧也必须跟随，否则灰线冻在起始几何）。
+    this.positionContentHandles()
     if (this.chatFrameHost !== null) {
       // agent 区气隙框（窗缘锚定）：盒 = [侧栏右缘, 窗右] × [卡顶-GAP, 窗底]，
       // border 带内缘精确贴合 agent 卡可见区（左/顶）、外缘直达窗缘（右/底）——
@@ -1155,6 +1803,32 @@ export class IdeLayoutController {
     this.chatFrameHost = null
     this.sidebarFrameHost?.remove()
     this.sidebarFrameHost = null
+    // 会话区宽度手柄与写在宿主根元素上的宽度变量一并卸掉（列宽回落到自适应默认）。
+    this.contentWidthHost?.style.removeProperty('--dsh-chat-user-width')
+    this.contentWidthHost = null
+    for (const el of this.contentHandles) el.remove()
+    this.contentHandles = []
+    this.contentColumn = null
+    this.contentWidth = 0
+    this.contentCards = []
+    this.contentScroller = null
+    this.contentComposer = null
+    this.contentHandleSegments = []
+    if (this.contentScrollFrame !== 0) {
+      cancelAnimationFrame(this.contentScrollFrame)
+      this.contentScrollFrame = 0
+    }
+    if (this.contentScrollListener !== null) {
+      document.removeEventListener('scroll', this.contentScrollListener, { capture: true })
+      this.contentScrollListener = null
+    }
+    if (this.bandDebugTimer !== null) {
+      clearInterval(this.bandDebugTimer)
+      this.bandDebugTimer = null
+    }
+    this.bandDebugSignature = ''
+    // body 上的写法是旧版残留（已被宿主根部 inline 值遮蔽），一并清掉。
+    document.body.style.removeProperty('--dsh-chat-user-width')
 
     const centerCol = this.frame?.querySelector<HTMLElement>('[class*="centerCol"]') ?? null
     // apply() 写入宿主中栏的内联样式，卸载时恢复（background-color 已随去膜

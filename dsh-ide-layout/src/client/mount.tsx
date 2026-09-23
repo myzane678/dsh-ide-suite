@@ -47,9 +47,15 @@ function injectDarkHighlightStyle(): void {
 }
 
 /**
- * 隐藏对话区内部的内容宽度手柄。它们只调整 `--dsh-chat-content-width`，会在
- * agent 区内部制造一条不可见却可拖拽的竖线；侧栏手柄必须保留，供宿主维护
- * sidebar 宽度，编辑器通过 layout.ts 的 ResizeObserver 自动跟随。
+ * 继续藏掉宿主自带的对话内容宽度手柄（`[class*="widthHandle"][data-side]`）。
+ * 为什么不反过来点亮它：宿主持有者的定位公式以**卡片中心**为基准
+ * （`right: calc(50% + 列宽/2 + 24px)`），而内容列真实中心因 scrollBody 的
+ * `scrollbar-gutter:stable` 偏半个槽宽，灰线又再往带内 16px —— 即便能点亮也落在
+ * 白缘外约 30px 的壁纸上；且在本环境下它压根不产出可见输出（逐像素穷举无灰线）。
+ * 会话区宽度改由 layout.ts 自建雙手柄承接：贴**实测白缘**、常驻灰竖线、对称缩放、
+ * 写宿主的 `--dsh-chat-user-width` 与 localStorage 键。这里继续藏掉宿主持有者，
+ * 避免出现两套抓手。侧栏手柄不受影响：宿主仍靠它维护 sidebar 宽度，编辑器经
+ * layout.ts 的 ResizeObserver 自动跟随。
  */
 let conversationWidthHandleHiderInjected = false
 function injectConversationWidthHandleHider(): void {
@@ -62,6 +68,33 @@ function injectConversationWidthHandleHider(): void {
   style.id = 'dsh-ide-layout-hide-conversation-width-handle'
   style.textContent = '[class*="widthHandle"][data-side="left"],[class*="widthHandle"][data-side="right"]'
     + '{visibility:hidden !important;pointer-events:none !important;}'
+  document.head.appendChild(style)
+}
+
+/**
+ * 把 maid-atelier 皮肤的 assistant「瓷片卡」宽度上限抬掉，让它跟随会话列。
+ *
+ * 为什么要这条：皮肤的瓷片卡规则写死 `width: min(680px, 96%)`
+ * （maid-styles.ts：assistant-step 下第四层 div[class*='markdown']，背景
+ * rgba(248,250,255,0.94) + 金边圆角）——白框最大只能到 680px，而会话列在整窗下
+ * 约 1413px（= 宿主 clamp 后的可用宽 − 176）。于是白框永远窄于会话列：layout.ts
+ * 自建的宽度手柄贴的是**会话列**边缘，自然落在白框外约 200px、压到两侧女仆身上；
+ * 更要紧的是大都督要的「白色框横向可拉伸」被这个上限彻底挡死，拖列车宽白框也不动。
+ *
+ * 抬起后白框 = 会话列：手柄正好贴白缘、拖拽即刻改变白框宽度、竖向中心线恒定。
+ * 只对 maid-atelier 皮肤生效（body[data-dsh-maid-atelier] 前缀），选择器形状照抄
+ * 皮肤自己那条（不碰 CSS Modules 哈希类名），插件卸载时随 <style> 一起消失。
+ */
+let contentColumnWidthFreedInjected = false
+function injectContentColumnWidthFree(): void {
+  if (contentColumnWidthFreedInjected) return
+  contentColumnWidthFreedInjected = true
+  if (document.getElementById('dsh-ide-layout-free-content-column-width') !== null) return
+  const style = document.createElement('style')
+  style.id = 'dsh-ide-layout-free-content-column-width'
+  style.textContent = 'body[data-dsh-maid-atelier]'
+    + " [data-chat-flow-kind='assistant-step'] > * > * > * > div[class*='markdown']"
+    + '{width:100% !important;max-width:100% !important;box-sizing:border-box !important;}'
   document.head.appendChild(style)
 }
 
@@ -595,6 +628,8 @@ function Workbench({ api }: { api: IdeMountApi }): JSX.Element {
 export function mountPanels(api: IdeMountApi): () => void {
   injectDarkHighlightStyle()
   injectConversationWidthHandleHider()
+  // 白框（皮肤瓷片卡）跟随会话列：宽度手柄才贴得上白缘、拖拽才拉得动白框。
+  injectContentColumnWidthFree()
   // 视口外跳过渲染只在拖动帧启用（常驻会引发向上快滑回弹抖动，见
   // conversation-perf.ts）；挂载时先清热重载残留的常驻旧规则，保持关闭态。
   setConversationPerf(false)
